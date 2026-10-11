@@ -1,28 +1,34 @@
-# pirateface
+# Pirate Face Hub
 
-Download Hugging Face models over BitTorrent from [Pirate Face](https://pirateface.co) seeders. No code changes.
+**Plug and play torrent downloads for Hugging Face models.** Add one package. Change nothing else.
 
 ```sh
 uv run --with pirateface python your_script.py
-# or
+```
+
+or install it once and forget about it:
+
+```sh
 pip install pirateface
 ```
 
-Your script stays the same. With transformers, for example:
+That's the whole setup. No code changes, no config, no new API. Your script still calls transformers or
+`huggingface_hub` like it always did, and the files now come from [Pirate Face](https://pirateface.co)
+seeders over BitTorrent:
 
 ```python
 from transformers import AutoModelForCausalLM
 
-model = AutoModelForCausalLM.from_pretrained("org/model")  # now downloads from the swarm
+model = AutoModelForCausalLM.from_pretrained("org/model")  # unchanged, now from the swarm
 ```
 
-This works for transformers' `from_pretrained`, and for anything else that downloads through
-`huggingface_hub`: diffusers, sentence-transformers, `hf_hub_download`, `snapshot_download` and the
-`hf download` CLI all try the swarm first.
+The same goes for anything that downloads through `huggingface_hub`: diffusers, sentence-transformers,
+`hf_hub_download`, `snapshot_download` and the `hf download` CLI.
 
 Every file is checked against Hugging Face's own fingerprint (SHA-256 for large files, git SHA-1 for the
 rest) before it goes into the normal Hugging Face cache. If Pirate Face doesn't have the model, a peer is
-missing, or a check fails, that file comes from Hugging Face as usual.
+missing, or a check fails, that file comes from Hugging Face as usual. Uninstall it and your code
+runs exactly as before.
 
 There's also a small CLI:
 
