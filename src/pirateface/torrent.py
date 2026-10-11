@@ -1,4 +1,5 @@
 import atexit
+import functools
 import json
 import os
 import shutil
@@ -8,6 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 import libtorrent as lt
@@ -92,16 +94,45 @@ def _flush_to_disk(h, timeout=30):
 NOT_LISTED = object()
 
 
-def lookup_magnet(repo_id):
-    """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
+@dataclass(frozen=True)
+class Listing:
+    revision: str
+    files: dict[str, str]  # path -> sha256
+
+
+@functools.cache
+def _lookup(repo_id):
+    """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error)."""
     url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
-            return json.load(r).get("magnet")
+            return json.load(r)
     except urllib.error.HTTPError as e:
         return NOT_LISTED if e.code == 404 else None
     except Exception:
         return None
+
+
+def lookup_magnet(repo_id):
+    """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
+    entry = _lookup(repo_id)
+    return entry.get("magnet") if isinstance(entry, dict) else entry
+
+
+@functools.cache
+def _listing(repo_id):
+    entry = _lookup(repo_id)
+    if not isinstance(entry, dict) or not entry.get("magnet") or not entry.get("files"):
+        return None
+    return Listing(entry["revision"], {f["path"]: f["sha256"] for f in entry["files"]})
+
+
+def listing(repo_id, revision):
+    """Pirate Face's commit and file hashes, if it has the asked-for revision ("main" means whatever it has)."""
+    found = _listing(repo_id)
+    if found is None or revision not in (None, "main", found.revision):
+        return None
+    return found
 
 
 def _handle(repo_id):

@@ -5,12 +5,12 @@ import sys
 
 from pirateface.config import flag
 
-TARGET = "huggingface_hub.file_download"
+TARGETS = {"huggingface_hub.file_download": "install", "huggingface_hub._snapshot_download": "install_snapshot"}
 
 
 class _PatchOnImport:
     def find_spec(self, name, path=None, target=None):
-        if name != TARGET:
+        if name not in TARGETS:
             return None
         sys.meta_path.remove(self)
         try:
@@ -28,7 +28,7 @@ class _PatchOnImport:
             try:
                 from pirateface import hook
 
-                hook.install(module)
+                getattr(hook, TARGETS[name])(module)
             except Exception as e:
                 print(f"[pirateface] hook disabled: {e}", file=sys.stderr)
 
@@ -37,9 +37,9 @@ class _PatchOnImport:
 
 
 if not flag("PF_DISABLE"):
-    if TARGET in sys.modules:
-        from pirateface import hook
+    sys.meta_path.insert(0, _PatchOnImport())
+    for name, installer in TARGETS.items():
+        if name in sys.modules:
+            from pirateface import hook
 
-        hook.install(sys.modules[TARGET])
-    else:
-        sys.meta_path.insert(0, _PatchOnImport())
+            getattr(hook, installer)(sys.modules[name])
