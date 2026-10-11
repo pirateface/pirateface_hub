@@ -4,14 +4,15 @@ import shutil
 import sys
 import threading
 import time
+from importlib.metadata import version
 from pathlib import Path
 
 import libtorrent as lt
 
-from pirateface import ui
+from pirateface import config, ui
 from pirateface.client import api
-from pirateface.config import CACHE_DIR, LISTEN, METADATA_TIMEOUT, STALL_TIMEOUT, VERSION, flag
 
+CACHE_DIR = Path(config.CACHE_DIR)
 _lock = threading.Lock()
 _session = None
 _handles = {}  # repo_id -> handle, or None if not on Pirate Face
@@ -25,11 +26,11 @@ class Unavailable(Exception):
 def _get_session():
     global _session
     if _session is None:
-        debug = flag("PF_DEBUG")
+        debug = config.flag("PF_DEBUG")
         _session = lt.session(
             {
-                "listen_interfaces": LISTEN,
-                "user_agent": f"pirateface/{VERSION}",
+                "listen_interfaces": config.LISTEN,
+                "user_agent": f"pirateface/{version('pirateface')}",
                 "alert_mask": lt.alert.category_t.all_categories if debug else lt.alert.category_t.storage_notification,
                 # The torrent goes "finished" between files and drops the web seed; reconnect in 2s, not 30s.
                 # Keep close_redundant_connections on: idle web seeds otherwise never request the next file.
@@ -107,7 +108,7 @@ def _handle(repo_id):
         if saved.exists():
             atp.ti = lt.torrent_info(str(saved))
         h = _get_session().add_torrent(atp)
-        deadline = time.monotonic() + METADATA_TIMEOUT
+        deadline = time.monotonic() + config.METADATA_TIMEOUT
         while not h.status().has_metadata:
             if time.monotonic() > deadline:
                 _get_session().remove_torrent(h)
@@ -198,8 +199,8 @@ def fetch_file(repo_id, filename):
             raise RuntimeError(f"torrent error: {st.errc.message()}")
         if done != last_done:
             last_done, last_change = done, time.monotonic()
-        elif time.monotonic() - last_change > STALL_TIMEOUT:
-            raise TimeoutError(f"stalled for {STALL_TIMEOUT:.0f}s")
+        elif time.monotonic() - last_change > config.STALL_TIMEOUT:
+            raise TimeoutError(f"stalled for {config.STALL_TIMEOUT:.0f}s")
         time.sleep(0.25)
     _flush_to_disk(h)
     return path
