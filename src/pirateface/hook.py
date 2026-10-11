@@ -1,15 +1,7 @@
-"""Swap huggingface_hub's byte-fetching step for a torrent download.
-
-huggingface_hub still does everything else (metadata, cache layout, symlinks,
-locks). We only replace `_download_to_tmp_and_move`: if Pirate Face has a
-torrent for the repo and the torrent's copy matches Hugging Face's own
-fingerprint (the etag), we use it. Anything else falls back to the original.
-"""
-
 import contextvars
 import functools
 import hashlib
-import os
+import inspect
 import shutil
 import sys
 from pathlib import Path
@@ -17,7 +9,7 @@ from pathlib import Path
 from pirateface import torrent, ui
 
 FUNC = "_download_to_tmp_and_move"
-# The byte-fetching step doesn't get the repo name, so we note it on the way in.
+# FUNC isn't passed the repo id, so the outer functions record it here.
 OUTER = ("_hf_hub_download_to_cache_dir", "_hf_hub_download_to_local_dir")
 _repo = contextvars.ContextVar("pirateface_repo", default=None)
 
@@ -34,9 +26,11 @@ def install(file_download):
     if getattr(original, "_pirateface", False):
         return
 
+    signature = inspect.signature(original)
+
     @functools.wraps(original)
     def patched(*args, **kwargs):
-        bound = dict(zip(original.__code__.co_varnames, args), **kwargs)
+        bound = signature.bind(*args, **kwargs).arguments
         dest = Path(bound["destination_path"])
         if dest.exists() and not bound.get("force_download"):
             return original(*args, **kwargs)
@@ -58,8 +52,7 @@ def install(file_download):
 
 
 def _hide_token_nag():
-    """Hugging Face's server sends "set a HF_TOKEN" as an X-HF-Warning header, shown once per topic.
-    Mark that topic as already shown. Every other server warning still gets through."""
+    """Silence the "set a HF_TOKEN" server warning only; other server warnings still show."""
     try:
         from huggingface_hub.utils import _http
 
@@ -82,7 +75,7 @@ def _remember_repo(outer):
 
 def _from_torrent(filename, etag, dest):
     repo_type, repo_id = _repo.get() or (None, None)
-    if repo_id is None or repo_type not in (None, "model"):  # models only for now
+    if repo_id is None or repo_type not in (None, "model"):
         return False
     src = torrent.fetch_file(repo_id, filename)
     if not _matches(src, etag):
@@ -93,24 +86,26 @@ def _from_torrent(filename, etag, dest):
 
 
 def _matches(path, etag):
-    """Compare against Hugging Face's etag: SHA-256 for LFS files, git blob SHA-1 otherwise."""
-    etag = (etag or "").strip('"').removeprefix("W/").strip('"')
+    """HF etags are SHA-256 for LFS files, git blob SHA-1 otherwise."""
+    etag = (etag or "").removeprefix("W/").strip('"')
     if len(etag) == 64:
         h = hashlib.sha256()
     elif len(etag) == 40:
         h = hashlib.sha1(b"blob %d\0" % path.stat().st_size)
     else:
         return False
-    with open(path, "rb") as f:
+    with path.open("rb") as f:
         while chunk := f.read(1 << 20):
             h.update(chunk)
     return h.hexdigest() == etag
 
 
 def _place(src, dest):
-    """Copy, don't hard-link: huggingface_hub makes its blobs read-only, and with a shared inode that
-    would lock libtorrent out of its own file. Our copy is deleted when the process exits."""
+    """Copy, not hard-link: HF makes its blobs read-only, which would lock libtorrent out of a shared inode."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".pf.incomplete")
-    shutil.copyfile(src, tmp)
-    os.replace(tmp, dest)
+    try:
+        shutil.copyfile(src, tmp)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)

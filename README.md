@@ -1,0 +1,62 @@
+# pirateface
+
+Download Hugging Face models over BitTorrent from [Pirate Face](https://pirateface.co) seeders. No code changes.
+
+```sh
+uv run --with pirateface python your_script.py
+# or
+pip install pirateface
+```
+
+Your script stays the same. With transformers, for example:
+
+```python
+from transformers import AutoModelForCausalLM
+
+model = AutoModelForCausalLM.from_pretrained("org/model")  # now downloads from the swarm
+```
+
+This works for transformers' `from_pretrained`, and for anything else that downloads through
+`huggingface_hub`: diffusers, sentence-transformers, `hf_hub_download`, `snapshot_download` and the
+`hf download` CLI all try the swarm first.
+
+Every file is checked against Hugging Face's own fingerprint (SHA-256 for large files, git SHA-1 for the
+rest) before it goes into the normal Hugging Face cache. If Pirate Face doesn't have the model, a peer is
+missing, or a check fails, that file comes from Hugging Face as usual.
+
+There's also a small CLI:
+
+```sh
+pf download org/model [--revision REV]
+```
+
+## How it hooks in
+
+The package installs `pirateface.pth`, which Python runs at startup. It does nothing until something
+imports `huggingface_hub.file_download`, then replaces only the step that fetches a file's bytes.
+Metadata, cache layout, symlinks and locks stay with `huggingface_hub`.
+
+## Settings
+
+| Variable | Default | |
+|---|---|---|
+| `PF_DISABLE` | off | Turn the hook off |
+| `PF_QUIET` | off | Print nothing |
+| `PF_NO_RESCUE` | off | Don't ask Pirate Face to add models it doesn't have yet |
+| `PF_RESCUE` | off | Ask even when stderr isn't a terminal (CI, Docker) |
+| `PF_DEBUG` | off | Print libtorrent's log |
+| `PF_CACHE` | `~/.cache/pirateface` | Where torrent data and file lists are kept |
+| `PF_API` | `https://pirateface.co` | Pirate Face server |
+| `PF_LISTEN` | any free port | libtorrent listen interfaces |
+| `PF_METADATA_TIMEOUT` | `30` | Seconds to wait for a peer to send the file list |
+| `PF_STALL_TIMEOUT` | `60` | Seconds without progress before falling back to Hugging Face |
+
+Flags are on for any value except empty or `0`.
+
+Needs Python 3.12 or 3.13 (libtorrent has no wheels for 3.14 yet).
+
+## Development
+
+```sh
+uv run --group dev ruff check
+```

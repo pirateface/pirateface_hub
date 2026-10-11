@@ -1,11 +1,9 @@
-"""Runs at every Python startup (via pirateface.pth). Must be cheap and never raise.
+"""Runs at every Python startup via pirateface.pth, so it must be cheap and never raise.
+Patches huggingface_hub lazily, when something imports it."""
 
-Importing huggingface_hub here would slow down every Python process, so we wait
-until something else imports huggingface_hub.file_download, then patch it.
-"""
-
-import os
 import sys
+
+from pirateface.config import flag
 
 TARGET = "huggingface_hub.file_download"
 
@@ -31,14 +29,14 @@ class _PatchOnImport:
                 from pirateface import hook
 
                 hook.install(module)
-            except Exception as e:  # never break the user's import
+            except Exception as e:
                 print(f"[pirateface] hook disabled: {e}", file=sys.stderr)
 
         spec.loader.exec_module = exec_and_patch
         return spec
 
 
-if os.environ.get("PF_DISABLE") != "1":
+if not flag("PF_DISABLE"):
     if TARGET in sys.modules:
         from pirateface import hook
 

@@ -1,5 +1,3 @@
-"""One libtorrent session per process. Fetches single files out of Pirate Face torrents."""
-
 import atexit
 import json
 import os
@@ -15,50 +13,45 @@ from pathlib import Path
 import libtorrent as lt
 
 from pirateface import rescue, ui
-
-API = os.environ.get("PF_API", "https://pirateface.co")
-DATA_DIR = Path(os.environ.get("PF_CACHE", Path.home() / ".cache" / "pirateface"))
-METADATA_TIMEOUT = float(os.environ.get("PF_METADATA_TIMEOUT", 30))
-STALL_TIMEOUT = float(os.environ.get("PF_STALL_TIMEOUT", 60))
+from pirateface.config import API, CACHE_DIR, LISTEN, METADATA_TIMEOUT, STALL_TIMEOUT, VERSION, flag
 
 _lock = threading.Lock()
 _session = None
-_handles = {}  # repo_id -> torrent_handle, or None if Pirate Face has no torrent
-_wanted = {}  # repo_id -> file indexes asked for so far
+_handles = {}  # repo_id -> handle, or None if not on Pirate Face
+_wanted = {}
 
 
 class Unavailable(Exception):
-    """Pirate Face can't supply this file; not an error."""
+    pass
 
 
 def _get_session():
     global _session
     if _session is None:
-        debug = bool(os.environ.get("PF_DEBUG"))
-        _session = lt.session({
-            "listen_interfaces": os.environ.get("PF_LISTEN", "0.0.0.0:0,[::]:0"),  # any free port
-            "user_agent": "pirateface/0.1",
-            "alert_mask": lt.alert.category_t.all_categories if debug else lt.alert.category_t.storage_notification,
-            # We fetch files one at a time, so the torrent goes "finished" between requests
-            # and libtorrent drops the web seed. Reconnect in 2s instead of the default 30s.
-            # Don't turn off close_redundant_connections: idle web seed connections then
-            # stay open and never request the next file.
-            "urlseed_wait_retry": 2,
-        })
+        debug = flag("PF_DEBUG")
+        _session = lt.session(
+            {
+                "listen_interfaces": LISTEN,
+                "user_agent": f"pirateface/{VERSION}",
+                "alert_mask": lt.alert.category_t.all_categories if debug else lt.alert.category_t.storage_notification,
+                # The torrent goes "finished" between files and drops the web seed; reconnect in 2s, not 30s.
+                # Keep close_redundant_connections on: idle web seeds otherwise never request the next file.
+                "urlseed_wait_retry": 2,
+            }
+        )
         threading.Thread(target=_pump_alerts, args=(_session, debug), daemon=True).start()
     return _session
 
 
-# libtorrent can call a piece done while its bytes are still in its write buffer, so the file on disk
-# can read as zeros. flush_cache() writes the buffer out and answers with a cache_flushed_alert. Those
-# answers don't say which request they belong to, so only one flush is in flight at a time.
+# libtorrent reports pieces done before they're written, so files can read as zeros until flushed.
+# cache_flushed_alert doesn't say which flush it answers, so only one runs at a time.
 _flush = threading.Condition()
 _flush_one_at_a_time = threading.Lock()
-_flush_done = {}  # info hash -> cache_flushed_alerts received
+_flush_done = {}
 
 
 def _pump_alerts(session, debug):
-    """The only reader of libtorrent's alerts. PF_DEBUG=1 also prints its log, minus per-block chatter."""
+    """The only reader of libtorrent's alerts."""
     noisy = ("PIECE", "HAVE", "REQUEST", "picker", "ALLOWED_FAST", "dht", "portmap", "stats", "block")
     while True:
         session.wait_for_alert(1000)
@@ -76,13 +69,15 @@ def _pump_alerts(session, debug):
 
 @atexit.register
 def _cleanup():
-    """Hugging Face's cache has its own copy of every file we handed over, so ours can go."""
     for h in _handles.values():
         if h is None:
             continue
-        folder = Path(h.status().save_path) / h.torrent_file().name()
+        path = Path(h.status().save_path) / h.torrent_file().name()
         _session.remove_torrent(h)
-        shutil.rmtree(folder, ignore_errors=True)
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
 
 
 def _flush_to_disk(h, timeout=30):
@@ -98,8 +93,7 @@ NOT_LISTED = object()
 
 
 def lookup_magnet(repo_id):
-    """The magnet, NOT_LISTED if Pirate Face has no torrent for the repo, or None if we can't tell
-    (network error, or a license whose terms have to be accepted first)."""
+    """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
     url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
@@ -111,7 +105,6 @@ def lookup_magnet(repo_id):
 
 
 def _handle(repo_id):
-    """Add the repo's torrent (once) and wait for its file list."""
     with _lock:
         if repo_id in _handles:
             return _handles[repo_id]
@@ -125,11 +118,10 @@ def _handle(repo_id):
             _handles[repo_id] = None
             return None
         atp = lt.parse_magnet_uri(magnet)
-        atp.save_path = str(DATA_DIR)
-        # Every file starts as "skip": nothing downloads until a file is asked for.
+        atp.save_path = str(CACHE_DIR)
         atp.flags |= lt.torrent_flags.default_dont_download
-        # A magnet is only an ID; the file list has to come from a peer. Keep it once we have it.
-        saved = DATA_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
+        # Cache the file list: a magnet alone needs a live peer to get it.
+        saved = CACHE_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
         if saved.exists():
             atp.ti = lt.torrent_info(str(saved))
         h = _get_session().add_torrent(atp)
@@ -152,13 +144,10 @@ def _handle(repo_id):
 
 
 def _show_status(repo_id, h, every=0.5, recent=3.0):
-    """Draw the model's status line while any requested file is still downloading.
-
-    Sources are whoever actually sent bytes in the last few seconds, not who is connected: the web seed
-    reconnects for every file and redirect, so "connected" flickers several times a second."""
+    """Sources = who sent bytes recently, not who is connected: the web seed reconnects per file and flickers."""
     fs = h.torrent_file().files()
-    sent = {}  # (ip, port) -> bytes received from that connection so far
-    last_seen = {}  # (ip, is web seed) -> time it last sent us bytes; a peer reconnecting still counts once
+    sent = {}
+    last_seen = {}
     bar = None
     while True:
         time.sleep(every)
@@ -184,7 +173,10 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
         if bar is None:
             bar = ui.repo_progress(repo_id)
         bar.total, bar.n = total, done
-        ui.set_status(bar, f"{files_done}/{len(wanted)} files · {done / 1e6:.1f}/{total / 1e6:.1f} MB · {label} · {h.status().download_rate / 1e6:.1f} MB/s")
+        ui.set_status(
+            bar,
+            f"{files_done}/{len(wanted)} files · {done / 1e6:.1f}/{total / 1e6:.1f} MB · {label} · {h.status().download_rate / 1e6:.1f} MB/s",
+        )
 
 
 def _file_index(ti, filename):
@@ -198,7 +190,6 @@ def _file_index(ti, filename):
 
 
 def fetch_file(repo_id, filename):
-    """Download one file of the repo's torrent and return its path. Raises Unavailable if Pirate Face doesn't have it."""
     h = _handle(repo_id)
     if h is None:
         raise Unavailable()
@@ -208,10 +199,8 @@ def fetch_file(repo_id, filename):
         raise Unavailable("not in the torrent")
     size = ti.files().file_size(i)
     path = Path(h.status().save_path) / ti.files().file_path(i)
-    # Want only the files asked for so far. Set them all in one call: a moment where
-    # every file is skipped marks the torrent "finished" and drops the web seed.
-    # Track this ourselves: libtorrent applies priority changes later, so reading them back
-    # while other threads (hf download fetches 8 files at once) set theirs loses updates.
+    # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
+    # libtorrent applies them lazily, so reading them back across threads loses updates.
     with _lock:
         wanted = _wanted.setdefault(repo_id, set())
         wanted.add(i)
@@ -223,7 +212,7 @@ def fetch_file(repo_id, filename):
         if done >= size:
             break
         st = h.status()
-        if st.errc.value():  # e.g. a file it can't open: no point waiting for the stall timeout
+        if st.errc.value():
             raise RuntimeError(f"torrent error: {st.errc.message()}")
         if done != last_done:
             last_done, last_change = done, time.monotonic()
