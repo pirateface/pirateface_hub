@@ -44,20 +44,6 @@ which commit and fingerprint to expect. If Hugging Face can't be reached, Pirate
 so downloads keep working through a Hugging Face outage. Cache layout, symlinks and locks stay with
 `huggingface_hub`.
 
-## Layout
-
-```
-src/pirateface/
-  huggingface.py   what we change inside huggingface_hub
-  client/
-    api.py         talks to pirateface.co: torrent lookup, file lists, rescue requests
-    torrent.py     downloads files from the swarm (libtorrent)
-  _boot.py         runs at Python startup, patches huggingface_hub when it's imported
-  ui.py            everything printed
-  config.py        PF_* settings
-  cli.py           `pf download`
-```
-
 ## Settings
 
 | Variable | Default | |
