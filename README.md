@@ -49,7 +49,6 @@ Metadata, cache layout, symlinks and locks stay with `huggingface_hub`.
 | `PF_DISABLE` | off | Turn the hook off |
 | `PF_QUIET` | off | Print nothing |
 | `PF_NO_RESCUE` | off | Don't ask Pirate Face to add models it doesn't have yet |
-| `PF_RESCUE` | off | Ask even when stderr isn't a terminal (CI, Docker) |
 | `PF_DEBUG` | off | Print libtorrent's log |
 | `PF_CACHE` | `~/.cache/pirateface` | Where torrent data and file lists are kept |
 | `PF_API` | `https://pirateface.co` | Pirate Face server |
