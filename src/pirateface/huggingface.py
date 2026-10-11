@@ -1,3 +1,5 @@
+"""Everything we change inside huggingface_hub."""
+
 import contextvars
 import functools
 import hashlib
@@ -6,7 +8,8 @@ import shutil
 import sys
 from pathlib import Path
 
-from pirateface import torrent, ui
+from pirateface import ui
+from pirateface.client import api, torrent
 
 FUNC = "_download_to_tmp_and_move"
 META = "_get_metadata_or_catch_error"
@@ -67,7 +70,7 @@ def _metadata_fallback(file_download, original):
         result = original(**kwargs)
         if not _unreachable(result[-1]) or kwargs["repo_type"] not in (None, "model"):
             return result
-        found = torrent.listing(kwargs["repo_id"], kwargs["revision"])
+        found = api.listing(kwargs["repo_id"], kwargs["revision"])
         etag = found and found.files.get(kwargs["filename"])
         if not etag:
             return result
@@ -103,7 +106,7 @@ def _snapshot_from_pirateface(*, repo_id, repo_type, revision, cache_dir, local_
     from huggingface_hub import constants, file_download
     from huggingface_hub.utils import filter_repo_objects
 
-    if repo_type not in (None, "model") or (found := torrent.listing(repo_id, revision)) is None:
+    if repo_type not in (None, "model") or (found := api.listing(repo_id, revision)) is None:
         return None
     for filename in filter_repo_objects(
         found.files, allow_patterns=kw["allow_patterns"], ignore_patterns=kw["ignore_patterns"]

@@ -26,9 +26,9 @@ class _PatchOnImport:
         def exec_and_patch(module):
             exec_module(module)
             try:
-                from pirateface import hook
+                from pirateface import huggingface
 
-                getattr(hook, TARGETS[name])(module)
+                getattr(huggingface, TARGETS[name])(module)
             except Exception as e:
                 print(f"[pirateface] hook disabled: {e}", file=sys.stderr)
 
@@ -40,6 +40,6 @@ if not flag("PF_DISABLE"):
     sys.meta_path.insert(0, _PatchOnImport())
     for name, installer in TARGETS.items():
         if name in sys.modules:
-            from pirateface import hook
+            from pirateface import huggingface
 
-            getattr(hook, installer)(sys.modules[name])
+            getattr(huggingface, installer)(sys.modules[name])
