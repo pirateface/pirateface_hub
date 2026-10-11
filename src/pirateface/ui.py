@@ -1,17 +1,16 @@
-"""Everything pirateface prints. Silent unless something is actually downloaded; PF_QUIET=1 silences it all."""
-
 import os
 import sys
 import threading
 
 from tqdm.auto import tqdm
 
-QUIET = os.environ.get("PF_QUIET") == "1"
+from pirateface.config import flag
+
+QUIET = flag("PF_QUIET")
 _color = sys.stderr.isatty() and "NO_COLOR" not in os.environ
 _lock = threading.Lock()
 _announced = set()
 
-# The Pirate Face logo: hat (first 3 lines), then the winking face with eyepatch.
 SPLASH = r'''
           _.-""""-._
      __.-'   (xx)   '-.__
@@ -34,7 +33,6 @@ def _print(line):
 
 
 def _bar():
-    """Left edge on every pirateface line, so ours stand out wherever they land between the library's and the script's."""
     return _c("35", "┃")
 
 
@@ -43,10 +41,9 @@ def mb(n):
 
 
 def splash():
-    """Once per process, terminals only: logs and CI just get the one-line banner."""
     if _announced or not sys.stderr.isatty():
         return
-    pad = " " * ((len("".join(TAGLINE)) - max(map(len, SPLASH))) // 2)  # center the logo over the tagline
+    pad = " " * ((len("".join(TAGLINE)) - max(map(len, SPLASH))) // 2)
     art = [pad + (_c("1", line) if i < 3 else _c("33", line)) for i, line in enumerate(SPLASH)]
     _print("\n".join(art) + "\n" + _c("1;35", TAGLINE[0]) + _c("2", TAGLINE[1]) + "\n")
 
@@ -57,7 +54,12 @@ def banner(repo_id, files, size):
             return
         splash()
         _announced.add(repo_id)
-    _print(_bar() + " " + _c("1;35", "🏴‍☠️ pirateface") + f"  {repo_id} is on Pirate Face ({files} files, {mb(size)}), downloading from the swarm")
+    _print(
+        _bar()
+        + " "
+        + _c("1;35", "🏴‍☠️ pirateface")
+        + f"  {repo_id} is on Pirate Face ({files} files, {mb(size)}), downloading from the swarm"
+    )
 
 
 def not_on_pirateface(repo_id, rescue_requested=False):
@@ -72,15 +74,19 @@ def not_on_pirateface(repo_id, rescue_requested=False):
 
 
 def repo_progress(repo_id):
-    """One status line per model, kept at the bottom while files download. The caller fills in the text."""
     return tqdm(
-        total=1, leave=False, file=sys.stderr, disable=QUIET or not sys.stderr.isatty(),  # no bars in logs/CI
-        desc=f"{_bar()}  🏴‍☠️ {repo_id}", bar_format="{desc}  {bar:20}", colour="magenta",
+        total=1,
+        leave=False,
+        file=sys.stderr,
+        disable=QUIET or not sys.stderr.isatty(),
+        desc=f"{_bar()}  🏴‍☠️ {repo_id}",
+        bar_format="{desc}  {bar:20}",
+        colour="magenta",
     )
 
 
 def set_status(bar, text):
-    """Our own text after the bar. tqdm's postfix field always adds a ", " in front."""
+    # Not tqdm's postfix: it always prepends ", ".
     bar.bar_format = "{desc}  {bar:20}  " + text.replace("{", "{{").replace("}", "}}")
     bar.refresh()
 
@@ -96,10 +102,11 @@ def sources_label(webseed, peers):
 
 
 def from_swarm(filename, size):
-    _print(f"{_bar()}  {_c('32', '✔')} {filename}  {_c('2', mb(size) + ' from the swarm, fingerprint matches Hugging Face')}")
+    _print(
+        f"{_bar()}  {_c('32', '✔')} {filename}  {_c('2', mb(size) + ' from the swarm, fingerprint matches Hugging Face')}"
+    )
 
 
 def from_hf(filename, reason=None):
-    """reason=None: already explained by not_on_pirateface()."""
     if reason:
         _print(f"{_bar()}  {_c('33', '↩')} {filename}  {_c('2', 'from Hugging Face (' + reason + ')')}")

@@ -1,8 +1,6 @@
-"""`pf download org/model`: fill the Hugging Face cache, torrent first."""
-
 import argparse
 
-import pirateface._boot  # noqa: F401  (also needed when run as a uv tool)
+import pirateface._boot  # noqa: F401  # uv tools skip .pth files
 
 
 def main():
