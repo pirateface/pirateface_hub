@@ -97,7 +97,7 @@ NOT_LISTED = object()
 @dataclass(frozen=True)
 class Listing:
     revision: str
-    files: dict[str, str]  # path -> sha256
+    files: dict[str, str]  # path -> Hugging Face etag (SHA-256, or git SHA-1 for small files)
 
 
 @functools.cache
@@ -119,20 +119,14 @@ def lookup_magnet(repo_id):
     return entry.get("magnet") if isinstance(entry, dict) else entry
 
 
-@functools.cache
-def _listing(repo_id):
+def listing(repo_id, revision):
+    """Pirate Face's commit and file hashes, if it has the asked-for revision ("main" means whatever it has)."""
     entry = _lookup(repo_id)
     if not isinstance(entry, dict) or not entry.get("magnet") or not entry.get("files"):
         return None
-    return Listing(entry["revision"], {f["path"]: f["sha256"] for f in entry["files"]})
-
-
-def listing(repo_id, revision):
-    """Pirate Face's commit and file hashes, if it has the asked-for revision ("main" means whatever it has)."""
-    found = _listing(repo_id)
-    if found is None or revision not in (None, "main", found.revision):
+    if revision not in (None, "main", entry["revision"]):
         return None
-    return found
+    return Listing(entry["revision"], {f["path"]: f["hash"] for f in entry["files"]})
 
 
 def _handle(repo_id):

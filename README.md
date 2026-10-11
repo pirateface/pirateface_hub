@@ -39,10 +39,10 @@ pf download org/model [--revision REV]
 ## How it hooks in
 
 The package installs `pirateface.pth`, which Python runs at startup. It does nothing until something
-imports `huggingface_hub`. Then, for each file, it asks Pirate Face for the commit and fingerprint
-first and Hugging Face only for what Pirate Face doesn't have, and fetches the bytes from the swarm.
-`snapshot_download` lists files from Pirate Face when Hugging Face can't be reached. Cache layout,
-symlinks and locks stay with `huggingface_hub`.
+imports `huggingface_hub`, then fetches each file's bytes from the swarm. Hugging Face still answers
+which commit and fingerprint to expect. If Hugging Face can't be reached, Pirate Face answers instead,
+so downloads keep working through a Hugging Face outage. Cache layout, symlinks and locks stay with
+`huggingface_hub`.
 
 ## Settings
 

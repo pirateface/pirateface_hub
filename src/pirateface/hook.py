@@ -4,7 +4,6 @@ import hashlib
 import inspect
 import shutil
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pirateface import torrent, ui
@@ -25,8 +24,6 @@ def install(file_download):
     if original is None:
         log(f"huggingface_hub has no {FUNC}; torrent downloads disabled")
         return
-    if getattr(original, "_pirateface", False):
-        return
 
     signature = inspect.signature(original)
 
@@ -46,79 +43,84 @@ def install(file_download):
             ui.from_hf(name, str(e) or type(e).__name__)
         return original(*args, **kwargs)
 
-    patched._pirateface = True
     setattr(file_download, FUNC, patched)
-    setattr(file_download, META, _metadata_from_pirateface(file_download, getattr(file_download, META)))
+    setattr(file_download, META, _metadata_fallback(file_download, getattr(file_download, META)))
     _hide_token_nag()
     for name in OUTER:
         setattr(file_download, name, _remember_repo(getattr(file_download, name)))
 
 
-def _metadata_from_pirateface(file_download, original):
-    """Ask Pirate Face for a file's commit and hash first, Hugging Face only if it doesn't have them."""
+def _unreachable(error):
+    """The errors huggingface_hub itself retries: no connection, timeouts, 429 and 5xx."""
+    from huggingface_hub import file_download as fd
+
+    return isinstance(error, fd._DEFAULT_RETRY_ON_EXCEPTIONS) or (
+        isinstance(error, fd.HfHubHTTPError) and error.response.status_code in fd._DEFAULT_RETRY_ON_STATUS_CODES
+    )
+
+
+def _metadata_fallback(file_download, original):
+    """When Hugging Face can't be reached, take the file's commit and hash from Pirate Face."""
 
     @functools.wraps(original)
     def patched(**kwargs):
-        found = None
-        if not kwargs["local_files_only"] and kwargs["repo_type"] in (None, "model"):
-            found = torrent.listing(kwargs["repo_id"], kwargs["revision"])
-        if found is None:
-            return original(**kwargs)
-        sha256 = found.files.get(kwargs["filename"])
-        if sha256 is None:  # not in the torrent; keep the snapshot on one commit
-            return original(**{**kwargs, "revision": found.revision})
+        result = original(**kwargs)
+        if not _unreachable(result[-1]) or kwargs["repo_type"] not in (None, "model"):
+            return result
+        found = torrent.listing(kwargs["repo_id"], kwargs["revision"])
+        etag = found and found.files.get(kwargs["filename"])
+        if not etag:
+            return result
         url = file_download.hf_hub_url(
             kwargs["repo_id"], kwargs["filename"], revision=found.revision, endpoint=kwargs["endpoint"]
         )
-        return url, sha256, found.revision, None, None, None
+        return url, etag, found.revision, None, None, None
 
     return patched
 
 
 def install_snapshot(snapshot_module):
-    """snapshot_download lists files with separate Hugging Face calls. If those fail, list from Pirate Face."""
+    """When Hugging Face can't be reached, snapshot_download lists the files from Pirate Face."""
     original = snapshot_module.snapshot_download
-    if getattr(original, "_pirateface", False):
-        return
     signature = inspect.signature(original)
 
     @functools.wraps(original)
     def patched(*args, **kwargs):
         try:
             return original(*args, **kwargs)
-        except snapshot_module.LocalEntryNotFoundError:
+        except snapshot_module.LocalEntryNotFoundError as e:
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
-            folder = _snapshot_from_pirateface(snapshot_module, **bound.arguments)
-            if folder is None:
+            folder = _unreachable(e.__cause__) and _snapshot_from_pirateface(**bound.arguments)
+            if not folder:
                 raise
             return folder
 
-    patched._pirateface = True
     snapshot_module.snapshot_download = patched
 
 
-def _snapshot_from_pirateface(snapshot_module, *, repo_id, repo_type, revision, cache_dir, local_dir, **kw):
+def _snapshot_from_pirateface(*, repo_id, repo_type, revision, cache_dir, local_dir, **kw):
     from huggingface_hub import constants, file_download
     from huggingface_hub.utils import filter_repo_objects
 
-    if kw["local_files_only"] or constants.HF_HUB_OFFLINE or kw["dry_run"] or local_dir is not None:
-        return None
     if repo_type not in (None, "model") or (found := torrent.listing(repo_id, revision)) is None:
         return None
-    files = filter_repo_objects(found.files, allow_patterns=kw["allow_patterns"], ignore_patterns=kw["ignore_patterns"])
-    get = functools.partial(
-        file_download.hf_hub_download,
-        repo_id,
-        revision=found.revision,
-        cache_dir=cache_dir,
-        force_download=kw["force_download"],
-        token=kw["token"],
-        headers=kw["headers"],
-        endpoint=kw["endpoint"],
-    )
-    with ThreadPoolExecutor(kw["max_workers"]) as pool:
-        list(pool.map(get, files))
+    for filename in filter_repo_objects(
+        found.files, allow_patterns=kw["allow_patterns"], ignore_patterns=kw["ignore_patterns"]
+    ):
+        file_download.hf_hub_download(
+            repo_id,
+            filename,
+            revision=found.revision,
+            cache_dir=cache_dir,
+            local_dir=local_dir,
+            force_download=kw["force_download"],
+            token=kw["token"],
+            headers=kw["headers"],
+            endpoint=kw["endpoint"],
+        )
+    if local_dir is not None:
+        return str(Path(local_dir).resolve())
     storage = Path(cache_dir or constants.HF_HUB_CACHE) / file_download.repo_folder_name(
         repo_id=repo_id, repo_type="model"
     )
