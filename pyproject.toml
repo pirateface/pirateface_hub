@@ -1,0 +1,24 @@
+[project]
+name = "pirateface"
+version = "0.1.0"
+description = "Download Hugging Face models over BitTorrent from Pirate Face seeders. No code changes."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "huggingface-hub>=2.0",
+    "libtorrent>=2.0",
+]
+
+[project.scripts]
+pf = "pirateface.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pirateface"]
+
+# The .pth file is what makes Python load the hook at startup.
+[tool.hatch.build.targets.wheel.force-include]
+"src/pirateface.pth" = "pirateface.pth"
