@@ -1,21 +1,12 @@
-"""Off unless stderr is a terminal (nobody sees the notice in CI or logs); PF_RESCUE=1 forces it on."""
-
 import atexit
 import contextlib
 import json
-import sys
 import threading
 import urllib.request
 
 from pirateface.config import API, flag
 
 _threads = []
-
-
-def enabled():
-    if flag("PF_NO_RESCUE"):
-        return False
-    return sys.stderr.isatty() or flag("PF_RESCUE")
 
 
 def _send(repo_id):
@@ -30,7 +21,7 @@ def _send(repo_id):
 
 
 def request(repo_id):
-    if not enabled():
+    if flag("PF_NO_RESCUE"):
         return False
     t = threading.Thread(target=_send, args=(repo_id,), daemon=True)
     t.start()
