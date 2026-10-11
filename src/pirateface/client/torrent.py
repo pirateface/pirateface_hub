@@ -1,21 +1,16 @@
 import atexit
-import functools
-import json
 import os
 import shutil
 import sys
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 
 import libtorrent as lt
 
-from pirateface import rescue, ui
-from pirateface.config import API, CACHE_DIR, LISTEN, METADATA_TIMEOUT, STALL_TIMEOUT, VERSION, flag
+from pirateface import ui
+from pirateface.client import api
+from pirateface.config import CACHE_DIR, LISTEN, METADATA_TIMEOUT, STALL_TIMEOUT, VERSION, flag
 
 _lock = threading.Lock()
 _session = None
@@ -91,51 +86,13 @@ def _flush_to_disk(h, timeout=30):
             raise TimeoutError("libtorrent didn't confirm the file was written to disk")
 
 
-NOT_LISTED = object()
-
-
-@dataclass(frozen=True)
-class Listing:
-    revision: str
-    files: dict[str, str]  # path -> Hugging Face etag (SHA-256, or git SHA-1 for small files)
-
-
-@functools.cache
-def _lookup(repo_id):
-    """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error)."""
-    url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
-    try:
-        with urllib.request.urlopen(url, timeout=10) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        return NOT_LISTED if e.code == 404 else None
-    except Exception:
-        return None
-
-
-def lookup_magnet(repo_id):
-    """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
-    entry = _lookup(repo_id)
-    return entry.get("magnet") if isinstance(entry, dict) else entry
-
-
-def listing(repo_id, revision):
-    """Pirate Face's commit and file hashes, if it has the asked-for revision ("main" means whatever it has)."""
-    entry = _lookup(repo_id)
-    if not isinstance(entry, dict) or not entry.get("magnet") or not entry.get("files"):
-        return None
-    if revision not in (None, "main", entry["revision"]):
-        return None
-    return Listing(entry["revision"], {f["path"]: f["hash"] for f in entry["files"]})
-
-
 def _handle(repo_id):
     with _lock:
         if repo_id in _handles:
             return _handles[repo_id]
-        magnet = lookup_magnet(repo_id)
-        if magnet is NOT_LISTED:
-            ui.not_on_pirateface(repo_id, rescue.request(repo_id))
+        magnet = api.lookup_magnet(repo_id)
+        if magnet is api.NOT_LISTED:
+            ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
             _handles[repo_id] = None
             return None
         if not magnet:
