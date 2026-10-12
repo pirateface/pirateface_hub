@@ -18,7 +18,7 @@ NOT_LISTED = object()
 @dataclass(frozen=True)
 class Listing:
     revision: str
-    files: dict[str, str]  # path -> Hugging Face etag (SHA-256, or git SHA-1 for small files)
+    files: dict[str, str]  # path -> SHA-256 of the file
 
 
 @functools.cache
@@ -47,7 +47,7 @@ def listing(repo_id, revision):
         return None
     if revision not in (None, "main", entry["revision"]):
         return None
-    return Listing(entry["revision"], {f["path"]: f["hash"] for f in entry["files"]})
+    return Listing(entry["revision"], {f["path"]: f["sha256"] for f in entry["files"]})
 
 
 _rescues = []
