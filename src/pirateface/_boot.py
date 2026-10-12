@@ -5,20 +5,16 @@ import sys
 
 from pirateface.config import flag
 
-# module -> patches to apply to it, as (pirateface module, function)
-TARGETS = {
-    "huggingface_hub.file_download": [("huggingface", "install"), ("fallback", "install")],
-    "huggingface_hub._snapshot_download": [("fallback", "install_snapshot")],
-}
+TARGETS = {"huggingface_hub.file_download"}
 
 
 def _install(name, module):
-    for patch_module, func in TARGETS[name]:
-        try:
-            patches = __import__(f"pirateface.{patch_module}", fromlist=[func])
-            getattr(patches, func)(module)
-        except Exception as e:
-            print(f"[pirateface] {patch_module}.{func} disabled: {e}", file=sys.stderr)
+    try:
+        from pirateface import huggingface
+
+        huggingface.install(module)
+    except Exception as e:
+        print(f"[pirateface] hook disabled: {e}", file=sys.stderr)
 
 
 class _PatchOnImport:

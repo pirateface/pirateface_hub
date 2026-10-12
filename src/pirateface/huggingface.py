@@ -1,5 +1,4 @@
-"""Swap huggingface_hub's file download for a torrent download, checked against Hugging Face's fingerprint.
-The fallback for when Hugging Face can't be reached is in fallback.py."""
+"""Swap huggingface_hub's file download for a torrent download, checked against Hugging Face's fingerprint."""
 
 import contextvars
 import functools

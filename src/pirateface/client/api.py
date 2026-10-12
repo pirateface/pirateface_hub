@@ -8,17 +8,10 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 
 from pirateface.config import API, flag
 
 NOT_LISTED = object()
-
-
-@dataclass(frozen=True)
-class Listing:
-    revision: str
-    files: dict[str, str]  # path -> SHA-256 of the file
 
 
 @functools.cache
@@ -38,16 +31,6 @@ def lookup_magnet(repo_id):
     """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
     entry = _lookup(repo_id)
     return entry.get("magnet") if isinstance(entry, dict) else entry
-
-
-def listing(repo_id, revision):
-    """Pirate Face's commit and file hashes, if it has the asked-for revision ("main" means whatever it has)."""
-    entry = _lookup(repo_id)
-    if not isinstance(entry, dict) or not entry.get("magnet") or not entry.get("files"):
-        return None
-    if revision not in (None, "main", entry["revision"]):
-        return None
-    return Listing(entry["revision"], {f["path"]: f["sha256"] for f in entry["files"]})
 
 
 _rescues = []

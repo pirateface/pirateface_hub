@@ -40,9 +40,9 @@ pf download org/model [--revision REV]
 
 The package installs `pirateface.pth`, which Python runs at startup. It does nothing until something
 imports `huggingface_hub`, then fetches each file's bytes from the swarm. Hugging Face still answers
-which commit and fingerprint to expect. If Hugging Face can't be reached, Pirate Face answers instead,
-so downloads keep working through a Hugging Face outage. Cache layout, symlinks and locks stay with
-`huggingface_hub`.
+which commit and fingerprint to expect, and every file from the swarm is checked against it. If Pirate
+Face has no torrent, or no peer sends the file list within 30 s, the file comes from Hugging Face as usual.
+Cache layout, symlinks and locks stay with `huggingface_hub`.
 
 ## Settings
 
