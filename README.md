@@ -60,7 +60,12 @@ Cache layout, symlinks and locks stay with `huggingface_hub`.
 
 Flags are on for any value except empty or `0`.
 
-Needs Python 3.12 or 3.13 (libtorrent has no wheels for 3.14 yet).
+Needs Python 3.12 or 3.13 (libtorrent has no wheels for 3.14 yet). `uvx` picks the newest Python it has,
+so pass the version:
+
+```sh
+uvx -p 3.13 --with pirateface --from huggingface_hub hf download org/model
+```
 
 ## Development
 
