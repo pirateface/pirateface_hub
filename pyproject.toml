@@ -1,11 +1,11 @@
 [project]
 name = "pirateface"
-version = "0.1.0"
+version = "0.1.1"
 description = "Download Hugging Face models over BitTorrent from Pirate Face seeders. No code changes."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 keywords = ["huggingface", "bittorrent", "libtorrent", "models", "download"]
 classifiers = [
     "Development Status :: 3 - Alpha",
