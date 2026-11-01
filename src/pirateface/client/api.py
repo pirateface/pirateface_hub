@@ -33,6 +33,7 @@ def lookup_magnet(repo_id):
     return entry.get("magnet") if isinstance(entry, dict) else entry
 
 
+@functools.cache
 def torrent_file(repo_id):
     """The .torrent's bytes if Pirate Face publishes one for the repo, else None."""
     entry = _lookup(repo_id)

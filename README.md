@@ -36,15 +36,15 @@ There's also a small CLI:
 pf download org/model [--revision REV] [--local-dir DIR]
 ```
 
-## Models published by Pirate Face
+## Models only on Pirate Face
 
-Some models are published by Pirate Face itself and are not on Hugging Face (for example
-`pirateface/anonymizer-cpu-v0.1`). They work like any other model: `from_pretrained`, `hf_hub_download`,
-`snapshot_download`, `hf download` and `pf download` all find them. The hook answers huggingface_hub's
-questions for these repos from Pirate Face (file list and SHA-256 per file), the files come over BitTorrent
-(Pirate Face serves them as a web seed, so no other peer is needed) and every file is checked against Pirate
-Face's SHA-256. For the `pirateface/` namespace, Pirate Face is the authority even if the name exists on
-Hugging Face.
+Some models are only on Pirate Face: published there directly by their authors, or removed from Hugging
+Face. They work like any other model: `from_pretrained`, `hf_hub_download`, `snapshot_download`,
+`hf download` and `pf download` all find them. When Hugging Face says a repo doesn't exist, the hook asks
+Pirate Face; if Pirate Face has it, the hook answers huggingface_hub from Pirate Face (file list, sizes,
+SHA-256 per file), the files come over BitTorrent (using the published .torrent, so no peer is needed for
+the file list, plus the author's web seed if there is one) and every file is checked against Pirate Face's
+SHA-256. Models on Hugging Face are unaffected.
 
 ## How it hooks in
 

@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from pirateface import releases, ui
+from pirateface import only_on_pirateface, ui
 from pirateface.client import torrent
 
 FUNC = "_download_to_tmp_and_move"
@@ -46,19 +46,19 @@ def install(file_download):
         return original(*args, **kwargs)
 
     setattr(file_download, FUNC, patched)
-    _serve_pirateface_releases()
+    _serve_models_only_on_pirateface()
     _hide_token_nag()
     for name in OUTER:
         setattr(file_download, name, _remember_repo(getattr(file_download, name)))
 
 
-def _serve_pirateface_releases():
+def _serve_models_only_on_pirateface():
     try:
         from huggingface_hub.utils import _http
 
-        releases.install(_http)
+        only_on_pirateface.install(_http)
     except (ImportError, AttributeError) as e:
-        log(f"models published only on Pirate Face disabled: {e}")
+        log(f"models only on Pirate Face disabled: {e}")
 
 
 def _hide_token_nag():
@@ -91,7 +91,7 @@ def _from_torrent(filename, etag, dest):
     if not _matches(src, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
     _place(src, dest)
-    ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if releases.entry(repo_id) else "Hugging Face")
+    ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if only_on_pirateface.model(repo_id) else "Hugging Face")
     return True
 
 
