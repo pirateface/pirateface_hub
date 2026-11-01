@@ -10,7 +10,7 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from pirateface import config, ui
+from pirateface import config, hub_responses, ui
 from pirateface.client import api, torrent
 
 FUNC = "_download_to_tmp_and_move"
@@ -151,7 +151,11 @@ def _wrap_transport(http):
             return response
 
         def _answer(self, request, path, namespace=None):
-            for pattern, answer in ((TREE, _tree), (INFO, _info), (RESOLVE, _resolve)):
+            for pattern, answer in (
+                (TREE, hub_responses.tree),
+                (INFO, hub_responses.info),
+                (RESOLVE, hub_responses.resolve),
+            ):
                 m = pattern.fullmatch(path)
                 if (
                     m
@@ -175,60 +179,3 @@ def _wrap_transport(http):
         return client
 
     http.set_client_factory(factory)
-
-
-def _known(found, revision):
-    return revision in (None, "main", found["commit"])
-
-
-def _not_found(code, message):
-    return 404, {"X-Error-Code": code, "X-Error-Message": message}, {"error": message}
-
-
-def _info(found, _method, revision=None):
-    if not _known(found, revision):
-        return _not_found("RevisionNotFound", f"Invalid rev id: {revision}")
-    siblings = [{"rfilename": p, "size": f[0]} for p, f in found["files"].items()]
-    repo_id = found["repo_id"]
-    info = {"id": repo_id, "modelId": repo_id, "author": repo_id.split("/")[0], "sha": found["commit"]}
-    return 200, {}, info | {"private": False, "disabled": False, "gated": False, "siblings": siblings}
-
-
-def _tree(found, _method, revision, folder=None):
-    if not _known(found, revision):
-        return _not_found("RevisionNotFound", f"Invalid rev id: {revision}")
-    prefix = f"{folder.strip('/')}/" if folder else ""
-    return (
-        200,
-        {},
-        [
-            {
-                "type": "file",
-                "path": path,
-                "size": size,
-                "oid": hashlib.sha1(sha256.encode()).hexdigest(),  # git blob id stand-in: only a cache key
-                "lfs": {"oid": sha256, "size": size, "pointerSize": 134},
-            }
-            for path, (size, sha256, _) in found["files"].items()
-            if path.startswith(prefix)
-        ],
-    )
-
-
-def _resolve(found, method, revision, filename):
-    if not _known(found, revision):
-        return _not_found("RevisionNotFound", f"Invalid rev id: {revision}")
-    if filename not in found["files"]:
-        return _not_found("EntryNotFound", f"{filename} is not in this model")
-    size, sha256, url = found["files"][filename]
-    headers = {
-        "X-Repo-Commit": found["commit"],
-        "X-Linked-Etag": f'"{sha256}"',
-        "X-Linked-Size": str(size),
-        "ETag": f'"{sha256}"',
-    }
-    if url:  # same shape as Hugging Face's LFS answer: a redirect to where the bytes are
-        return 302, headers | {"Location": url}, None
-    if method == "HEAD":
-        return 200, headers | {"Content-Length": str(size)}, None
-    return _not_found("EntryNotFound", f"{filename} is only available over BitTorrent")
