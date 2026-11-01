@@ -129,7 +129,6 @@ def _handle(repo_id):
 
 
 def _save_torrent_file(repo_id, saved, infohash):
-    """Use the .torrent Pirate Face publishes (when it has one), so no peer is needed for the file list."""
     data = api.torrent_file(repo_id)
     if data and str(lt.torrent_info(data).info_hashes().v1) == infohash:
         saved.parent.mkdir(parents=True, exist_ok=True)

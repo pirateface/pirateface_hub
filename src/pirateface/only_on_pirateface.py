@@ -1,10 +1,4 @@
-"""Models that are only on Pirate Face (never on Hugging Face, or removed from it) still load through huggingface_hub.
-
-When Hugging Face answers "repository not found", ask Pirate Face. If it lists the model with hf: false, answer
-huggingface_hub's request from Pirate Face instead: model info, the file tree, and each file's fingerprint
-(SHA-256) and size. Sizes and web seeds come from the published .torrent. The torrent hook then downloads the
-files; plain HTTP follows the redirect to the web seed when there is one.
-"""
+"""Serve models that are only on Pirate Face through huggingface_hub, as if Hugging Face had them."""
 
 import functools
 import hashlib
@@ -16,13 +10,12 @@ from pirateface.client import api
 INFO = re.compile(r"/api/models/([\w.-]+/[\w.-]+)(?:/revision/([^/]+))?")
 TREE = re.compile(r"/api/models/([\w.-]+/[\w.-]+)/tree/([^/]+)(?:/(.+))?")
 RESOLVE = re.compile(r"/([\w.-]+/[\w.-]+)/resolve/([^/]+)/(.+)")
-# Pirate Face's own namespace: answered by Pirate Face first (the Hugging Face user of that name is someone else).
 PF_NAMESPACE = "pirateface"
 
 
 @functools.cache
 def model(repo_id):
-    """{"repo_id", "commit", "files": {path: (size, sha256, url or None)}} if the model is only on Pirate Face, else None."""
+    """The model's commit and files {path: (size, sha256, url)} if it is only on Pirate Face, else None."""
     e = api.lookup(repo_id)
     if not (isinstance(e, dict) and e.get("hf") is False):
         return None
@@ -56,7 +49,6 @@ def model(repo_id):
 
 
 def install(http):
-    """Wrap the transport of the clients huggingface_hub's client factory makes."""
     import httpx2
     from huggingface_hub import constants
 
@@ -66,7 +58,6 @@ def install(http):
 
         def handle_request(self, request):
             path = urllib.parse.unquote(request.url.path) if request.url.host == self.host else ""
-            # Pirate Face's own namespace: Pirate Face answers first, Hugging Face is never asked.
             if path and (answered := self._answer(request, path, PF_NAMESPACE)):
                 return answered
             response = self.inner.handle_request(request)

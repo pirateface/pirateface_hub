@@ -1,4 +1,4 @@
-"""Models only on Pirate Face: the answers huggingface_hub gets, without network (Pirate Face and Hugging Face faked)."""
+"""Models only on Pirate Face, with Pirate Face and Hugging Face faked."""
 
 import types
 
@@ -15,7 +15,6 @@ FILES = {"model.onnx": b"weights" * 100, "docs/README.md": b"# card\n"}
 
 @pytest.fixture
 def pf(tmp_path, monkeypatch):
-    """Pirate Face lists repos under 'pirateface/' and 'gone/' as only on Pirate Face, with a real .torrent."""
     root = tmp_path / "m"
     for path, data in FILES.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
@@ -35,7 +34,6 @@ def pf(tmp_path, monkeypatch):
 
 
 def client(hf):
-    """A client whose transport is wrapped by install(), with Hugging Face answered by hf(request)."""
     http = types.SimpleNamespace(_GLOBAL_CLIENT_FACTORY=lambda: httpx2.Client(transport=httpx2.MockTransport(hf)))
     http.set_client_factory = lambda f: setattr(http, "factory", f)
     oop.install(http)
