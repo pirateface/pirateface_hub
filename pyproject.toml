@@ -38,7 +38,7 @@ packages = ["src/pirateface"]
 "src/pirateface.pth" = "pirateface.pth"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["ruff>=0.6"]
 
 [tool.ruff]
 line-length = 120
