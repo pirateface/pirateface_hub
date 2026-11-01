@@ -9,7 +9,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from pirateface.client import torrent_files
 from pirateface.config import API, flag
 
 NOT_LISTED = object()
@@ -57,8 +56,10 @@ def pf_only(repo_id):
     data = torrent_file(repo_id)
     if not data:
         return None
+    from pirateface.client import torrent  # torrent imports api
+
     sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
-    files = {path: (size, sha[path], url) for path, size, url in torrent_files.files(data) if path in sha}
+    files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
     return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
 
 

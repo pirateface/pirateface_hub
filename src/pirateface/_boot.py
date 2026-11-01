@@ -10,9 +10,9 @@ TARGETS = {"huggingface_hub.file_download"}
 
 def _install(name, module):
     try:
-        from pirateface import huggingface
+        from pirateface.huggingface import hook
 
-        huggingface.install(module)
+        hook.install(module)
     except Exception as e:
         print(f"[pirateface] hook disabled: {e}", file=sys.stderr)
 
