@@ -101,9 +101,9 @@ def sources_label(webseed, peers):
     return "finding sources…"
 
 
-def from_swarm(filename, size):
+def from_swarm(filename, size, checked_by="Hugging Face"):
     _print(
-        f"{_bar()}  {_c('32', '✔')} {filename}  {_c('2', mb(size) + ' from the swarm, fingerprint matches Hugging Face')}"
+        f"{_bar()}  {_c('32', '✔')} {filename}  {_c('2', mb(size) + ' from the swarm, fingerprint matches ' + checked_by)}"
     )
 
 

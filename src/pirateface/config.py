@@ -10,3 +10,4 @@ CACHE_DIR = os.environ.get("PF_CACHE") or os.path.expanduser("~/.cache/piratefac
 LISTEN = os.environ.get("PF_LISTEN", "0.0.0.0:0,[::]:0")
 METADATA_TIMEOUT = float(os.environ.get("PF_METADATA_TIMEOUT", "30"))
 STALL_TIMEOUT = float(os.environ.get("PF_STALL_TIMEOUT", "60"))
+PF_ONLY_STALL_TIMEOUT = float(os.environ.get("PF_ONLY_STALL_TIMEOUT", "600"))

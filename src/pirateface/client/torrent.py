@@ -4,6 +4,7 @@ import shutil
 import sys
 import threading
 import time
+import urllib.parse
 from importlib.metadata import version
 from pathlib import Path
 
@@ -105,6 +106,8 @@ def _handle(repo_id):
         atp.flags |= lt.torrent_flags.default_dont_download
         # Cache the file list: a magnet alone needs a live peer to get it.
         saved = CACHE_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
+        if not saved.exists():
+            _save_torrent_file(repo_id, saved, str(atp.info_hashes.v1))
         if saved.exists():
             atp.ti = lt.torrent_info(str(saved))
         h = _get_session().add_torrent(atp)
@@ -124,6 +127,13 @@ def _handle(repo_id):
         real = [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
         ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real))
         return h
+
+
+def _save_torrent_file(repo_id, saved, infohash):
+    data = api.torrent_file(repo_id)
+    if data and str(lt.torrent_info(data).info_hashes().v1) == infohash:
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        saved.write_bytes(data)
 
 
 def _show_status(repo_id, h, every=0.5, recent=3.0):
@@ -172,7 +182,7 @@ def _file_index(ti, filename):
     return None
 
 
-def fetch_file(repo_id, filename):
+def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
     h = _handle(repo_id)
     if h is None:
         raise Unavailable()
@@ -199,8 +209,33 @@ def fetch_file(repo_id, filename):
             raise RuntimeError(f"torrent error: {st.errc.message()}")
         if done != last_done:
             last_done, last_change = done, time.monotonic()
-        elif time.monotonic() - last_change > config.STALL_TIMEOUT:
-            raise TimeoutError(f"stalled for {config.STALL_TIMEOUT:.0f}s")
+        elif time.monotonic() - last_change > stall_timeout:
+            raise TimeoutError(f"stalled for {stall_timeout:.0f}s")
         time.sleep(0.25)
     _flush_to_disk(h)
     return path
+
+
+def files_in(data):
+    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out."""
+    torrent = lt.bdecode(data)
+    info = torrent[b"info"]
+    name = info[b"name"].decode()
+    if b"files" not in info:
+        return [(name, info[b"length"], web_seed_url(torrent, name))]
+    files = []
+    for f in info[b"files"]:
+        if b"p" in f.get(b"attr", b""):
+            continue
+        path = "/".join(part.decode() for part in f[b"path"])
+        files.append((path, f[b"length"], web_seed_url(torrent, f"{name}/{path}")))
+    return files
+
+
+def web_seed_url(torrent, path_in_torrent):
+    """BEP 19: a base ending in "/" gets the file's path appended; otherwise it is the file itself."""
+    seeds = torrent.get(b"url-list") or []
+    seed = (seeds if isinstance(seeds, bytes) else seeds[0] if seeds else b"").decode()
+    if not seed:
+        return None
+    return seed + urllib.parse.quote(path_in_torrent) if seed.endswith("/") else seed

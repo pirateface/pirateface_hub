@@ -8,8 +8,9 @@ import shutil
 import sys
 from pathlib import Path
 
-from pirateface import ui
-from pirateface.client import torrent
+from pirateface import config, ui
+from pirateface.client import api, torrent
+from pirateface.huggingface import transport
 
 FUNC = "_download_to_tmp_and_move"
 # FUNC isn't passed the repo id, so the outer functions record it here.
@@ -46,6 +47,7 @@ def install(file_download):
         return original(*args, **kwargs)
 
     setattr(file_download, FUNC, patched)
+    transport.install()
     _hide_token_nag()
     for name in OUTER:
         setattr(file_download, name, _remember_repo(getattr(file_download, name)))
@@ -77,11 +79,12 @@ def _from_torrent(filename, etag, dest):
     repo_type, repo_id = _repo.get() or (None, None)
     if repo_id is None or repo_type not in (None, "model"):
         return False
-    src = torrent.fetch_file(repo_id, filename)
+    pf_only = api.pf_only(repo_id) is not None
+    src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else config.STALL_TIMEOUT)
     if not _matches(src, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
     _place(src, dest)
-    ui.from_swarm(filename, src.stat().st_size)
+    ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if pf_only else "Hugging Face")
     return True
 
 

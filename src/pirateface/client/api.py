@@ -15,7 +15,7 @@ NOT_LISTED = object()
 
 
 @functools.cache
-def _lookup(repo_id):
+def lookup(repo_id):
     """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error)."""
     url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
     try:
@@ -29,8 +29,38 @@ def _lookup(repo_id):
 
 def lookup_magnet(repo_id):
     """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
-    entry = _lookup(repo_id)
+    entry = lookup(repo_id)
     return entry.get("magnet") if isinstance(entry, dict) else entry
+
+
+@functools.cache
+def torrent_file(repo_id):
+    """The .torrent's bytes if Pirate Face publishes one for the repo, else None."""
+    entry = lookup(repo_id)
+    path = entry.get("torrent") if isinstance(entry, dict) else None
+    if not path:
+        return None
+    try:
+        with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
+            return r.read()
+    except Exception:
+        return None
+
+
+@functools.cache
+def pf_only(repo_id):
+    """The repo's commit and files {path: (size, sha256, url)} if only Pirate Face has it, else None."""
+    entry = lookup(repo_id)
+    if not (isinstance(entry, dict) and entry.get("hf") is False):
+        return None
+    data = torrent_file(repo_id)
+    if not data:
+        return None
+    from pirateface.client import torrent  # torrent imports api
+
+    sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
+    files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
+    return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
 
 
 _rescues = []
