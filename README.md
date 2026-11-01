@@ -68,6 +68,7 @@ Cache layout, symlinks and locks stay with `huggingface_hub`.
 | `PF_LISTEN` | any free port | libtorrent listen interfaces |
 | `PF_METADATA_TIMEOUT` | `30` | Seconds to wait for a peer to send the file list |
 | `PF_STALL_TIMEOUT` | `60` | Seconds without progress before falling back to Hugging Face |
+| `PF_ONLY_STALL_TIMEOUT` | `600` | The same for models only on Pirate Face (no Hugging Face to fall back to) |
 
 Flags are on for any value except empty or `0`.
 

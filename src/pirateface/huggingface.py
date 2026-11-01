@@ -8,7 +8,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from pirateface import only_on_pirateface, ui
+from pirateface import config, only_on_pirateface, ui
 from pirateface.client import torrent
 
 FUNC = "_download_to_tmp_and_move"
@@ -87,11 +87,12 @@ def _from_torrent(filename, etag, dest):
     repo_type, repo_id = _repo.get() or (None, None)
     if repo_id is None or repo_type not in (None, "model"):
         return False
-    src = torrent.fetch_file(repo_id, filename)
+    pf_only = only_on_pirateface.model(repo_id) is not None
+    src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else None)
     if not _matches(src, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
     _place(src, dest)
-    ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if only_on_pirateface.model(repo_id) else "Hugging Face")
+    ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if pf_only else "Hugging Face")
     return True
 
 

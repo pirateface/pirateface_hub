@@ -182,7 +182,7 @@ def _file_index(ti, filename):
     return None
 
 
-def fetch_file(repo_id, filename):
+def fetch_file(repo_id, filename, stall_timeout=None):
     h = _handle(repo_id)
     if h is None:
         raise Unavailable()
@@ -209,8 +209,8 @@ def fetch_file(repo_id, filename):
             raise RuntimeError(f"torrent error: {st.errc.message()}")
         if done != last_done:
             last_done, last_change = done, time.monotonic()
-        elif time.monotonic() - last_change > config.STALL_TIMEOUT:
-            raise TimeoutError(f"stalled for {config.STALL_TIMEOUT:.0f}s")
+        elif time.monotonic() - last_change > (stall_timeout or config.STALL_TIMEOUT):
+            raise TimeoutError(f"stalled for {stall_timeout or config.STALL_TIMEOUT:.0f}s")
         time.sleep(0.25)
     _flush_to_disk(h)
     return path

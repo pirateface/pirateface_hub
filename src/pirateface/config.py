@@ -10,3 +10,5 @@ CACHE_DIR = os.environ.get("PF_CACHE") or os.path.expanduser("~/.cache/piratefac
 LISTEN = os.environ.get("PF_LISTEN", "0.0.0.0:0,[::]:0")
 METADATA_TIMEOUT = float(os.environ.get("PF_METADATA_TIMEOUT", "30"))
 STALL_TIMEOUT = float(os.environ.get("PF_STALL_TIMEOUT", "60"))
+# Models only on Pirate Face have no Hugging Face to fall back to, so waiting longer always beats giving up.
+PF_ONLY_STALL_TIMEOUT = float(os.environ.get("PF_ONLY_STALL_TIMEOUT", "600"))
