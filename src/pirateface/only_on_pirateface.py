@@ -16,6 +16,8 @@ from pirateface.client import api
 INFO = re.compile(r"/api/models/([\w.-]+/[\w.-]+)(?:/revision/([^/]+))?")
 TREE = re.compile(r"/api/models/([\w.-]+/[\w.-]+)/tree/([^/]+)(?:/.*)?")
 RESOLVE = re.compile(r"/([\w.-]+/[\w.-]+)/resolve/([^/]+)/(.+)")
+# Pirate Face's own namespace: answered by Pirate Face first (the Hugging Face user of that name is someone else).
+PF_NAMESPACE = "pirateface"
 
 
 @functools.cache
@@ -59,20 +61,26 @@ def install(http):
             self.inner, self.host = inner, urllib.parse.urlsplit(constants.ENDPOINT).hostname
 
         def handle_request(self, request):
+            path = urllib.parse.unquote(request.url.path) if request.url.host == self.host else ""
+            # Pirate Face's own namespace: Pirate Face answers first, Hugging Face is never asked.
+            if path and (answered := self._answer(request, path, PF_NAMESPACE)):
+                return answered
             response = self.inner.handle_request(request)
             # Hugging Face says "repository not found" as a 401 (no token) or 404 RepositoryNotFound (with one).
             missing = response.status_code == 401 or response.headers.get("X-Error-Code") == "RepositoryNotFound"
-            if request.url.host != self.host or not missing:
-                return response
-            path = urllib.parse.unquote(request.url.path)
+            if path and missing and (answered := self._answer(request, path)):
+                response.close()
+                return answered
+            return response
+
+        def _answer(self, request, path, namespace=None):
             for pattern, answer in ((TREE, _tree), (INFO, _info), (RESOLVE, _resolve)):
                 m = pattern.fullmatch(path)
-                if m and (found := model(m[1])):
-                    response.close()
+                if m and (namespace is None or m[1].split("/")[0].lower() == namespace) and (found := model(m[1])):
                     status, headers, body = answer(found, request.method, *m.groups()[1:])
                     content = b"" if body is None else None
                     return httpx2.Response(status, headers=headers, json=body, content=content, request=request)
-            return response
+            return None
 
         def close(self):
             self.inner.close()
