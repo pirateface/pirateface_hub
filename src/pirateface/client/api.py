@@ -33,6 +33,19 @@ def lookup_magnet(repo_id):
     return entry.get("magnet") if isinstance(entry, dict) else entry
 
 
+def torrent_file(repo_id):
+    """The .torrent's bytes if Pirate Face publishes one for the repo, else None."""
+    entry = _lookup(repo_id)
+    path = entry.get("torrent") if isinstance(entry, dict) else None
+    if not path:
+        return None
+    try:
+        with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
+            return r.read()
+    except Exception:
+        return None
+
+
 _rescues = []
 
 
