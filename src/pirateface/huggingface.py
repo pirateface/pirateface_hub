@@ -88,7 +88,7 @@ def _from_torrent(filename, etag, dest):
     if repo_id is None or repo_type not in (None, "model"):
         return False
     pf_only = only_on_pirateface.model(repo_id) is not None
-    src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else None)
+    src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else config.STALL_TIMEOUT)
     if not _matches(src, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
     _place(src, dest)

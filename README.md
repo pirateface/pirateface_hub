@@ -38,14 +38,10 @@ pf download org/model [--revision REV] [--local-dir DIR]
 
 ## Models only on Pirate Face
 
-Some models are only on Pirate Face: published there directly by their authors, or removed from Hugging
-Face. They work like any other model: `from_pretrained`, `hf_hub_download`, `snapshot_download`,
-`hf download` and `pf download` all find them. When Hugging Face says a repo doesn't exist, the hook asks
-Pirate Face; if Pirate Face has it, the hook answers huggingface_hub from Pirate Face (file list, sizes,
-SHA-256 per file), the files come over BitTorrent (using the published .torrent, so no peer is needed for
-the file list, plus the author's web seed if there is one) and every file is checked against Pirate Face's
-SHA-256. Models on Hugging Face are unaffected. For Pirate Face's own namespace, `pirateface/`, Pirate Face
-is asked first and Hugging Face never is.
+Some models are only on Pirate Face (published there directly, or removed from Hugging Face). They load
+like any other model. When Hugging Face says a repo doesn't exist, the hook asks Pirate Face, answers
+huggingface_hub from Pirate Face's file list, downloads over BitTorrent and checks every file's SHA-256.
+For Pirate Face's own namespace, `pirateface/`, Pirate Face is asked first and Hugging Face never is.
 
 ## How it hooks in
 

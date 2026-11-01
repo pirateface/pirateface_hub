@@ -15,7 +15,7 @@ NOT_LISTED = object()
 
 
 @functools.cache
-def _lookup(repo_id):
+def lookup(repo_id):
     """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error)."""
     url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
     try:
@@ -29,14 +29,14 @@ def _lookup(repo_id):
 
 def lookup_magnet(repo_id):
     """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
-    entry = _lookup(repo_id)
+    entry = lookup(repo_id)
     return entry.get("magnet") if isinstance(entry, dict) else entry
 
 
 @functools.cache
 def torrent_file(repo_id):
     """The .torrent's bytes if Pirate Face publishes one for the repo, else None."""
-    entry = _lookup(repo_id)
+    entry = lookup(repo_id)
     path = entry.get("torrent") if isinstance(entry, dict) else None
     if not path:
         return None

@@ -14,7 +14,7 @@ import urllib.parse
 from pirateface.client import api
 
 INFO = re.compile(r"/api/models/([\w.-]+/[\w.-]+)(?:/revision/([^/]+))?")
-TREE = re.compile(r"/api/models/([\w.-]+/[\w.-]+)/tree/([^/]+)(?:/.*)?")
+TREE = re.compile(r"/api/models/([\w.-]+/[\w.-]+)/tree/([^/]+)(?:/(.+))?")
 RESOLVE = re.compile(r"/([\w.-]+/[\w.-]+)/resolve/([^/]+)/(.+)")
 # Pirate Face's own namespace: answered by Pirate Face first (the Hugging Face user of that name is someone else).
 PF_NAMESPACE = "pirateface"
@@ -23,7 +23,7 @@ PF_NAMESPACE = "pirateface"
 @functools.cache
 def model(repo_id):
     """{"repo_id", "commit", "files": {path: (size, sha256, url or None)}} if the model is only on Pirate Face, else None."""
-    e = api._lookup(repo_id)
+    e = api.lookup(repo_id)
     if not (isinstance(e, dict) and e.get("hf") is False):
         return None
     data = api.torrent_file(repo_id)
@@ -31,23 +31,27 @@ def model(repo_id):
         return None
     import libtorrent as lt
 
-    ti = lt.torrent_info(lt.bdecode(data))
-    fs = ti.files()
-    multi = fs.num_files() > 1
-    seeds = [s["url"] for s in ti.web_seeds()]
+    torrent = lt.bdecode(data)
+    info = torrent[b"info"]
+    name = info[b"name"].decode()
+    if b"files" in info:  # multi-file: <name>/<path>; BEP 47 pad files left out
+        listed = [
+            ("/".join(p.decode() for p in f[b"path"]), f[b"length"])
+            for f in info[b"files"]
+            if b"p" not in f.get(b"attr", b"")
+        ]
+        listed = [(path, size, f"{name}/{path}") for path, size in listed]
+    else:
+        listed = [(name, info[b"length"], name)]
+    seeds = torrent.get(b"url-list") or []
+    seed = (seeds if isinstance(seeds, bytes) else seeds[0] if seeds else b"").decode()
     sha = {f["path"]: f["sha256"] for f in e.get("files") or []}
     files = {}
-    for i in range(fs.num_files()):
-        if fs.file_flags(i) & fs.flag_pad_file:
-            continue
-        torrent_path = fs.file_path(i).replace("\\", "/")
-        path = torrent_path.split("/", 1)[1] if multi else torrent_path
+    for path, size, seed_path in listed:
         if path in sha:
             # BEP 19: a base ending in "/" gets <torrent name>/<path> appended; otherwise it is the file itself.
-            url = None
-            if seeds:
-                url = seeds[0] + urllib.parse.quote(torrent_path) if seeds[0].endswith("/") else seeds[0]
-            files[path] = (fs.file_size(i), sha[path], url)
+            url = (seed + urllib.parse.quote(seed_path) if seed.endswith("/") else seed) or None
+            files[path] = (size, sha[path], url)
     return {"repo_id": e["repoId"], "commit": e["revision"], "files": files} if files else None
 
 
@@ -78,8 +82,9 @@ def install(http):
                 m = pattern.fullmatch(path)
                 if m and (namespace is None or m[1].split("/")[0].lower() == namespace) and (found := model(m[1])):
                     status, headers, body = answer(found, request.method, *m.groups()[1:])
-                    content = b"" if body is None else None
-                    return httpx2.Response(status, headers=headers, json=body, content=content, request=request)
+                    if body is None:
+                        return httpx2.Response(status, headers=headers, request=request)
+                    return httpx2.Response(status, headers=headers, json=body, request=request)
             return None
 
         def close(self):
@@ -112,9 +117,10 @@ def _info(found, _method, revision=None):
     return 200, {}, info | {"private": False, "disabled": False, "gated": False, "siblings": siblings}
 
 
-def _tree(found, _method, revision):
+def _tree(found, _method, revision, folder=None):
     if not _known(found, revision):
         return _not_found("RevisionNotFound", f"Invalid rev id: {revision}")
+    prefix = f"{folder.strip('/')}/" if folder else ""
     return (
         200,
         {},
@@ -127,6 +133,7 @@ def _tree(found, _method, revision):
                 "lfs": {"oid": sha256, "size": size, "pointerSize": 134},
             }
             for path, (size, sha256, _) in found["files"].items()
+            if path.startswith(prefix)
         ],
     )
 
