@@ -49,37 +49,43 @@ def torrent_file(repo_id):
 
 @functools.cache
 def pf_only(repo_id):
-    """The model's commit and files {path: (size, sha256, url)} if it is only on Pirate Face, else None."""
-    e = lookup(repo_id)
-    if not (isinstance(e, dict) and e.get("hf") is False):
+    """The repo's commit and files {path: (size, sha256, url)} if only Pirate Face has it, else None."""
+    entry = lookup(repo_id)
+    if not (isinstance(entry, dict) and entry.get("hf") is False):
         return None
     data = torrent_file(repo_id)
     if not data:
         return None
+    sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
+    files = {path: (size, sha[path], url) for path, size, url in _torrent_files(data) if path in sha}
+    return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
+
+
+def _torrent_files(data):
+    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out."""
     import libtorrent as lt
 
     torrent = lt.bdecode(data)
     info = torrent[b"info"]
     name = info[b"name"].decode()
-    if b"files" in info:  # multi-file: <name>/<path>; BEP 47 pad files left out
-        listed = [
-            ("/".join(p.decode() for p in f[b"path"]), f[b"length"])
-            for f in info[b"files"]
-            if b"p" not in f.get(b"attr", b"")
-        ]
-        listed = [(path, size, f"{name}/{path}") for path, size in listed]
-    else:
-        listed = [(name, info[b"length"], name)]
+    if b"files" not in info:
+        return [(name, info[b"length"], _web_seed_url(torrent, name))]
+    files = []
+    for f in info[b"files"]:
+        if b"p" in f.get(b"attr", b""):
+            continue
+        path = "/".join(part.decode() for part in f[b"path"])
+        files.append((path, f[b"length"], _web_seed_url(torrent, f"{name}/{path}")))
+    return files
+
+
+def _web_seed_url(torrent, path_in_torrent):
+    """BEP 19: a base ending in "/" gets the file's path appended; otherwise it is the file itself."""
     seeds = torrent.get(b"url-list") or []
     seed = (seeds if isinstance(seeds, bytes) else seeds[0] if seeds else b"").decode()
-    sha = {f["path"]: f["sha256"] for f in e.get("files") or []}
-    files = {}
-    for path, size, seed_path in listed:
-        if path in sha:
-            # BEP 19: a base ending in "/" gets <torrent name>/<path> appended; otherwise it is the file itself.
-            url = (seed + urllib.parse.quote(seed_path) if seed.endswith("/") else seed) or None
-            files[path] = (size, sha[path], url)
-    return {"repo_id": e["repoId"], "commit": e["revision"], "files": files} if files else None
+    if not seed:
+        return None
+    return seed + urllib.parse.quote(path_in_torrent) if seed.endswith("/") else seed
 
 
 _rescues = []
