@@ -63,6 +63,46 @@ def pf_only(repo_id):
     return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
 
 
+# Fallback when the site doesn't answer; normally replaced by /api/trackers.
+TRACKERS = ["udp://tracker.pirateface.co:6969/announce", "http://tracker.pirateface.co:6969/announce"]
+
+
+def trackers(key):
+    """Public trackers plus, last, this account's seeding tracker (from the site, so changes need no release)."""
+    req = urllib.request.Request(f"{API}/api/trackers", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            lines = r.read().decode().split()
+    except Exception:
+        return TRACKERS
+    return [t for t in lines if t.startswith(("udp://", "http://", "https://"))] or TRACKERS
+
+
+@functools.cache
+def licenses():
+    """The licenses Pirate Face lists, and repos approved one by one."""
+    with urllib.request.urlopen(f"{API}/api/licenses", timeout=30) as r:
+        return json.load(r)
+
+
+def submit(key, body):
+    """POST a community torrent. Returns (HTTP status, JSON answer)."""
+    req = urllib.request.Request(
+        f"{API}/api/community-torrents",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.load(e)
+        except Exception:
+            return e.code, {"error": e.reason}
+
+
 _rescues = []
 
 

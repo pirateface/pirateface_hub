@@ -34,7 +34,36 @@ There's also a small CLI:
 
 ```sh
 pf download org/model [--revision REV] [--local-dir DIR]
+pf seed org/model [FOLDER]
 ```
+
+## Share a model
+
+```sh
+pf seed org/model [FOLDER]
+```
+
+If Pirate Face lists the model, this adds its torrent to your torrent client, linked to the files you have
+(from FOLDER, or the Hugging Face cache), and the client seeds. If not, it builds a hybrid (v1 + v2) torrent,
+checks every file against Hugging Face, adds it to your client and submits it. Matching models are listed
+right away. With no FOLDER and nothing in the cache, it downloads the model first. Your files are only read;
+links to them go in `~/pirateface-seeds/<model>`.
+
+```sh
+pf seed --hf-cache         # every complete model in the Hugging Face cache, asking per model
+pf seed --update-trackers  # add your account's seeding tracker to torrents you already seed
+```
+
+It asks once for your key from [pirateface.co/account](https://pirateface.co/account) and saves it.
+`-y` skips every prompt; agents should pass it only on the user's explicit OK.
+
+| Variable | |
+|---|---|
+| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`) |
+| `PIRATEFACE_SEEDS` | Where the links and `.torrent` files go (default `~/pirateface-seeds`) |
+| `HF_TOKEN` | For gated repos |
+| `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
+| `QBT_URL`, `QBT_USER`, `QBT_PASS` | qBittorrent Web UI (default `http://localhost:8080`) |
 
 ## Models only on Pirate Face
 
