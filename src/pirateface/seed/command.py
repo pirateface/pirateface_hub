@@ -11,12 +11,15 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+from pirateface import ui
 from pirateface.client import api, torrent
 from pirateface.config import API
 from pirateface.seed import clients, hub, package
 
 TERMS_VERSION = "2026-09-18.2"
-KEY_FILE = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "pirateface" / "key"
+# %APPDATA% on Windows, else $XDG_CONFIG_HOME or ~/.config (where package.sh kept it).
+CONFIG = os.environ.get("APPDATA") if os.name == "nt" else os.environ.get("XDG_CONFIG_HOME")
+KEY_FILE = Path(CONFIG or Path.home() / ".config") / "pirateface" / "key"
 SEEDS = Path(os.environ.get("PIRATEFACE_SEEDS") or Path.home() / "pirateface-seeds")
 HOURLY_LIMIT = 200  # submissions per account per hour, enforced by the site
 REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
@@ -91,7 +94,7 @@ def start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wa
         link = package.magnet(v1, v2, name, trackers)
         print("    Command-click the magnet (Control-click on Linux). Your torrent client opens.")
         print(f"    Save the files to {save_dir} so it finds them and starts seeding.")
-        print(f"\033]8;;{link}\a{link}\033]8;;\a")
+        print(f"\033]8;;{link}\a{link}\033]8;;\a" if ui.ansi() else link)
         print(f"    Or open the file: {torrent_path}")
         if wait:
             ask("    Press Enter once it says Seeding. ")
@@ -271,7 +274,7 @@ def submit_new(
     readme = save_dir / name / "README.md"
     if readme.is_file() and readme.stat().st_size <= 200_000:
         with contextlib.suppress(UnicodeDecodeError):
-            body["readme"] = readme.read_text("utf-8")
+            body["readme"] = readme.read_bytes().decode("utf-8")  # as is: the site checks it against the manifest
     if web_seed:
         body["webSeed"] = web_seed
 
@@ -359,6 +362,8 @@ def submit(args):
         raise SeedError(f"{args.folder} is not a folder")
     src = src.resolve()
     name = args.name or src.name
+    if package.unportable([name]):
+        raise SeedError(f"{name!r} can't be a folder name on Windows; pass --name")
     out = Path(args.out) if args.out else Path.cwd() / f"pirateface-{name}"
     # A dry run needs no key: without one the torrent gets only the public trackers (same infohash).
     if args.dry_run:
@@ -543,3 +548,8 @@ def run(args):
         sys.exit(75)  # same code as package.sh, so scripts that loop over models can stop
     except (SeedError, package.LinkError) as e:
         sys.exit(f"error: {e}")
+    except OSError as e:  # unreadable file, full disk, path too long: a message, not a stack trace
+        hint = ""
+        if os.name == "nt" and len(str(e.filename or "")) >= 260:
+            hint = " (path over 260 characters: use a shorter --out, or turn on Windows long paths)"
+        sys.exit(f"error: {e}{hint}")

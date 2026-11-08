@@ -16,19 +16,45 @@ from pirateface.seed import hybrid
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
 
 
+# Names Windows can't store: reserved device names (with any extension), <>:"\\|?* and control
+# characters, and a trailing dot or space.
+WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.IGNORECASE)
+WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
+
+
 class LinkError(Exception):
     pass
 
 
 def link(target, dest):
+    """Symlink dest to target; a hard link where symlinks need rights (Windows without Developer Mode)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         dest.symlink_to(target)
-    except OSError as e:
-        raise LinkError(
-            f"could not link {dest.name} ({e}). On Windows, turn on Developer Mode "
-            "(Settings > System > For developers) or run as administrator"
-        ) from e
+    except OSError:
+        try:
+            dest.hardlink_to(target)
+        except OSError as e:
+            raise LinkError(
+                f"could not link {dest.name} ({e}). On Windows, turn on Developer Mode "
+                "(Settings > System > For developers), or use an --out folder on the same drive as the model"
+            ) from e
+
+
+def unportable(paths):
+    """Why these torrent paths ("/"-separated) can't be downloaded as-is everywhere, or [].
+    Names that differ only in case (file or folder) would overwrite each other on Windows and macOS,
+    and names Windows can't store fail there. Both are refused, not renamed: renaming changes the files."""
+    problems, seen = [], {}
+    for rel in paths:
+        parts = rel.split("/")
+        for i, part in enumerate(parts):
+            prefix = "/".join(parts[: i + 1])
+            if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
+                problems.append(f"{prefix}: not a valid file name on Windows")
+            if seen.setdefault(prefix.casefold(), prefix) != prefix:
+                problems.append(f"{prefix} and {seen[prefix.casefold()]}: names differ only in case")
+    return list(dict.fromkeys(problems))
 
 
 def stage(src, dest):
@@ -39,6 +65,9 @@ def stage(src, dest):
         for n in names:
             rel = Path(d, n).relative_to(src).as_posix()
             (skipped if SKIP.search(rel) else included).append(rel)
+    problems = unportable(sorted(included))
+    if problems:
+        raise LinkError("rename or remove these files first:\n    " + "\n    ".join(problems[:20]))
     for rel in sorted(included):
         link(Path(src, rel).absolute(), dest / rel)
     return sorted(included), sorted(skipped)

@@ -66,12 +66,17 @@ pf submit --direct --repo your-org/model [--license ID] [--web-seed https://host
 orgs; `--web-seed` is an https server with the files at `<url><name>/<path>`. `--dry-run` builds the torrent and
 prints the infohashes and the exact request, without adding anything to a client or submitting. It needs no key.
 
+Files whose names differ only in case, or that Windows can't store (`CON`, `nul.txt`, a trailing dot or
+space, `<>:"\|?*`), stop the run with a list to rename: downloaders on Windows and macOS would lose or
+fail on them. Files are linked, not copied; on Windows without Developer Mode `pf` uses hard links, so the
+output folder (`--out`) must be on the same drive as the model.
+
 It asks once for your key from [pirateface.co/account](https://pirateface.co/account) and saves it.
 `-y` skips every prompt; agents should pass it only on the user's explicit OK.
 
 | Variable | |
 |---|---|
-| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`) |
+| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`, on Windows `%APPDATA%\pirateface\key`) |
 | `PIRATEFACE_SEEDS` | Where the links and `.torrent` files go (default `~/pirateface-seeds`) |
 | `HF_TOKEN` | For gated repos |
 | `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
