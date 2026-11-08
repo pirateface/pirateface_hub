@@ -1,6 +1,6 @@
 [project]
 name = "pirateface"
-version = "0.1.2"
+version = "0.2.0"
 description = "Download Hugging Face models over BitTorrent from Pirate Face seeders. No code changes."
 readme = "README.md"
 license = "MIT"
