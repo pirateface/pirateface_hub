@@ -28,9 +28,25 @@ def main():
         "--update-trackers", action="store_true", help="add your seeding tracker to torrents already seeding"
     )
     s.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
+    u = sub.add_parser(
+        "submit",
+        help="package a model folder and submit it to Pirate Face (the flags of package.sh)",
+        description="Builds the hybrid torrent, hashes the files, checks them against Hugging Face, adds the torrent "
+        "to your torrent client, then submits it. Files are only read, never changed or uploaded.",
+    )
+    u.add_argument("folder", nargs="?", help="the model's files")
+    u.add_argument("--repo", help="Hugging Face id, author/model")
+    u.add_argument("--revision", help="commit the files came from (default: Hugging Face's, when the hashes match)")
+    u.add_argument("--name", help="torrent name (default: the folder's name)")
+    u.add_argument("--out", help="where the .torrent and file links go (default: ./pirateface-NAME)")
+    u.add_argument("--direct", action="store_true", help="your own model, not on Hugging Face: no Hugging Face check")
+    u.add_argument("--license", help="license id from pirateface.co/api/licenses (direct listings, or none on HF)")
+    u.add_argument("--web-seed", help="direct listings: https base URL serving BASE/NAME/PATH (BEP 19)")
+    u.add_argument("--dry-run", action="store_true", help="build and print everything; add nothing, submit nothing")
+    u.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
     args = p.parse_args()
 
-    if args.cmd == "seed":
+    if args.cmd in ("seed", "submit"):
         from pirateface.seed import command
 
         return command.run(args)

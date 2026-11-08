@@ -4,10 +4,12 @@ import atexit
 import contextlib
 import functools
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from importlib.metadata import version
 
 from pirateface.config import API, flag
 
@@ -85,12 +87,38 @@ def licenses():
         return json.load(r)
 
 
+VERSION = version("pirateface")
+
+
+def min_client_version():
+    """The oldest pirateface Pirate Face takes submissions from (GET /api/cli), or None if it doesn't say."""
+    try:
+        with urllib.request.urlopen(f"{API}/api/cli", timeout=15) as r:
+            minimum = json.load(r).get("minVersion")
+    except Exception:
+        return None  # an older site without /api/cli, or offline: the submission itself will say
+    return minimum if isinstance(minimum, str) and re.fullmatch(r"\d+(\.\d+)*", minimum) else None
+
+
+def _release(v):
+    return [int(x) for x in re.match(r"\d+(?:\.\d+)*", v).group().split(".")]
+
+
+def older(a, b):
+    """a < b, comparing release numbers like 0.1.2 (a suffix such as .dev1 is ignored)."""
+    return _release(a) < _release(b)
+
+
 def submit(key, body):
     """POST a community torrent. Returns (HTTP status, JSON answer)."""
     req = urllib.request.Request(
         f"{API}/api/community-torrents",
         data=json.dumps(body).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": f"pirateface/{VERSION}",
+        },
         method="POST",
     )
     try:

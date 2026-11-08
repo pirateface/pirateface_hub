@@ -35,6 +35,7 @@ There's also a small CLI:
 ```sh
 pf download org/model [--revision REV] [--local-dir DIR]
 pf seed org/model [FOLDER]
+pf submit --repo org/model [--dry-run] FOLDER
 ```
 
 ## Share a model
@@ -54,12 +55,28 @@ pf seed --hf-cache         # every complete model in the Hugging Face cache, ask
 pf seed --update-trackers  # add your account's seeding tracker to torrents you already seed
 ```
 
+To submit one folder with `package.sh`'s flags:
+
+```sh
+pf submit --repo org/model [--revision COMMIT] [--name NAME] [--out DIR] [-y] ./model-folder
+pf submit --direct --repo your-org/model [--license ID] [--web-seed https://host/path/] ./model-folder
+```
+
+`--direct` publishes your own model (not on Hugging Face) under your Hugging Face username or one of your
+orgs; `--web-seed` is an https server with the files at `<url><name>/<path>`. `--dry-run` builds the torrent and
+prints the infohashes and the exact request, without adding anything to a client or submitting. It needs no key.
+
+Files whose names differ only in case, or that Windows can't store (`CON`, `nul.txt`, a trailing dot or
+space, `<>:"\|?*`), stop the run with a list to rename: downloaders on Windows and macOS would lose or
+fail on them. Files are linked, not copied; on Windows without Developer Mode `pf` uses hard links, so the
+output folder (`--out`) must be on the same drive as the model.
+
 It asks once for your key from [pirateface.co/account](https://pirateface.co/account) and saves it.
 `-y` skips every prompt; agents should pass it only on the user's explicit OK.
 
 | Variable | |
 |---|---|
-| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`) |
+| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`, on Windows `%APPDATA%\pirateface\key`) |
 | `PIRATEFACE_SEEDS` | Where the links and `.torrent` files go (default `~/pirateface-seeds`) |
 | `HF_TOKEN` | For gated repos |
 | `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |

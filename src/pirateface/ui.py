@@ -7,7 +7,15 @@ from tqdm.auto import tqdm
 from pirateface.config import flag
 
 QUIET = flag("PF_QUIET")
-_color = sys.stderr.isatty() and "NO_COLOR" not in os.environ
+
+
+def ansi(stream=sys.stdout):
+    """Escape codes only on a terminal that shows them: not piped, not NO_COLOR, and on Windows only
+    in Windows Terminal (the classic console prints them as text)."""
+    return stream.isatty() and "NO_COLOR" not in os.environ and (os.name != "nt" or "WT_SESSION" in os.environ)
+
+
+_color = ansi(sys.stderr)
 _lock = threading.Lock()
 _announced = set()
 

@@ -10,8 +10,16 @@ from pathlib import Path
 
 import libtorrent as lt
 
+from pirateface.seed import hybrid
+
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
+
+
+# Names Windows can't store: reserved device names (with any extension), <>:"\\|?* and control
+# characters, and a trailing dot or space.
+WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.IGNORECASE)
+WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
 
 
 class LinkError(Exception):
@@ -19,14 +27,34 @@ class LinkError(Exception):
 
 
 def link(target, dest):
+    """Symlink dest to target; a hard link where symlinks need rights (Windows without Developer Mode)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         dest.symlink_to(target)
-    except OSError as e:
-        raise LinkError(
-            f"could not link {dest.name} ({e}). On Windows, turn on Developer Mode "
-            "(Settings > System > For developers) or run as administrator"
-        ) from e
+    except OSError:
+        try:
+            dest.hardlink_to(target)
+        except OSError as e:
+            raise LinkError(
+                f"could not link {dest.name} ({e}). On Windows, turn on Developer Mode "
+                "(Settings > System > For developers), or use an --out folder on the same drive as the model"
+            ) from e
+
+
+def unportable(paths):
+    """Why these torrent paths ("/"-separated) can't be downloaded as-is everywhere, or [].
+    Names that differ only in case (file or folder) would overwrite each other on Windows and macOS,
+    and names Windows can't store fail there. Both are refused, not renamed: renaming changes the files."""
+    problems, seen = [], {}
+    for rel in paths:
+        parts = rel.split("/")
+        for i, part in enumerate(parts):
+            prefix = "/".join(parts[: i + 1])
+            if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
+                problems.append(f"{prefix}: not a valid file name on Windows")
+            if seen.setdefault(prefix.casefold(), prefix) != prefix:
+                problems.append(f"{prefix} and {seen[prefix.casefold()]}: names differ only in case")
+    return list(dict.fromkeys(problems))
 
 
 def stage(src, dest):
@@ -37,6 +65,9 @@ def stage(src, dest):
         for n in names:
             rel = Path(d, n).relative_to(src).as_posix()
             (skipped if SKIP.search(rel) else included).append(rel)
+    problems = unportable(sorted(included))
+    if problems:
+        raise LinkError("rename or remove these files first:\n    " + "\n    ".join(problems[:20]))
     for rel in sorted(included):
         link(Path(src, rel).absolute(), dest / rel)
     return sorted(included), sorted(skipped)
@@ -63,21 +94,8 @@ def checksums(root, paths):
 
 
 def make_torrent(save_dir, name, trackers):
-    """Hybrid (BEP 52) torrent of save_dir/name with BEP 47 pad files. Web seed downloads of plain v1
-    multi-file torrents stall at ~99%. About 2000 pieces of 256 KiB-64 MiB (stays under the 3 MB upload limit
-    up to ~10 TB). Returns (bytes, v1 infohash, v2 infohash)."""
-    fs = lt.file_storage()
-    lt.add_files(fs, str(save_dir / name))
-    exp = 18
-    while exp < 26 and fs.total_size() / (1 << exp) > 2000:
-        exp += 1
-    ct = lt.create_torrent(fs, 1 << exp)
-    for tier, url in enumerate(trackers):
-        ct.add_tracker(url, tier)
-    lt.set_piece_hashes(ct, str(save_dir))
-    data = lt.bencode(ct.generate())
-    hashes = lt.torrent_info(data).info_hashes()
-    return data, str(hashes.v1), str(hashes.v2)
+    """Hybrid v1 + v2 torrent of save_dir/name (see hybrid.py). Returns (bytes, v1 infohash, v2 infohash)."""
+    return hybrid.build(Path(save_dir, name), trackers)
 
 
 def with_trackers(data, trackers):
