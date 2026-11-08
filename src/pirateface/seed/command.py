@@ -181,7 +181,10 @@ def submit_new(
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
 
-    licenses = api.licenses()
+    try:
+        licenses = api.licenses()
+    except OSError as e:
+        raise SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
     ids = [lic["id"] for lic in licenses["licenses"]]
     match = False
     if direct:
