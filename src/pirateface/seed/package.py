@@ -10,6 +10,8 @@ from pathlib import Path
 
 import libtorrent as lt
 
+from pirateface.seed import hybrid
+
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
 
@@ -63,21 +65,8 @@ def checksums(root, paths):
 
 
 def make_torrent(save_dir, name, trackers):
-    """Hybrid (BEP 52) torrent of save_dir/name with BEP 47 pad files. Web seed downloads of plain v1
-    multi-file torrents stall at ~99%. About 2000 pieces of 256 KiB-64 MiB (stays under the 3 MB upload limit
-    up to ~10 TB). Returns (bytes, v1 infohash, v2 infohash)."""
-    fs = lt.file_storage()
-    lt.add_files(fs, str(save_dir / name))
-    exp = 18
-    while exp < 26 and fs.total_size() / (1 << exp) > 2000:
-        exp += 1
-    ct = lt.create_torrent(fs, 1 << exp)
-    for tier, url in enumerate(trackers):
-        ct.add_tracker(url, tier)
-    lt.set_piece_hashes(ct, str(save_dir))
-    data = lt.bencode(ct.generate())
-    hashes = lt.torrent_info(data).info_hashes()
-    return data, str(hashes.v1), str(hashes.v2)
+    """Hybrid v1 + v2 torrent of save_dir/name (see hybrid.py). Returns (bytes, v1 infohash, v2 infohash)."""
+    return hybrid.build(Path(save_dir, name), trackers)
 
 
 def with_trackers(data, trackers):

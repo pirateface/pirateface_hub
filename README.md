@@ -35,6 +35,7 @@ There's also a small CLI:
 ```sh
 pf download org/model [--revision REV] [--local-dir DIR]
 pf seed org/model [FOLDER]
+pf submit --repo org/model [--dry-run] FOLDER
 ```
 
 ## Share a model
@@ -53,6 +54,17 @@ links to them go in `~/pirateface-seeds/<model>`.
 pf seed --hf-cache         # every complete model in the Hugging Face cache, asking per model
 pf seed --update-trackers  # add your account's seeding tracker to torrents you already seed
 ```
+
+To submit one folder with `package.sh`'s flags:
+
+```sh
+pf submit --repo org/model [--revision COMMIT] [--name NAME] [--out DIR] [-y] ./model-folder
+pf submit --direct --repo your-org/model [--license ID] [--web-seed https://host/path/] ./model-folder
+```
+
+`--direct` publishes your own model (not on Hugging Face) under your Hugging Face username or one of your
+orgs; `--web-seed` is an https server with the files at `<url><name>/<path>`. `--dry-run` builds the torrent and
+prints the infohashes and the exact request, without adding anything to a client or submitting. It needs no key.
 
 It asks once for your key from [pirateface.co/account](https://pirateface.co/account) and saves it.
 `-y` skips every prompt; agents should pass it only on the user's explicit OK.

@@ -4,9 +4,11 @@ Local files are only read, never changed or uploaded."""
 import base64
 import contextlib
 import getpass
+import json
 import os
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 from pirateface.client import api, torrent
@@ -115,12 +117,51 @@ def seed_listed(repo, src, key):
     start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=False)
 
 
-def submit_new(repo, src, revision, key):
-    """Package src, check it against Hugging Face, start seeding, then submit."""
-    name = repo.split("/")[1]
-    out = SEEDS / name
+class Answers:
+    """Prompts during a submission. A dry run never asks: it records what a real run would ask for."""
+
+    def __init__(self, dry_run):
+        self.dry_run, self.skipped = dry_run, []
+
+    def ask(self, prompt, what):
+        if self.dry_run:
+            self.skipped.append(what)
+            print(f"    (dry run: a real run asks for the {what} here)")
+            return None
+        return ask(prompt)
+
+
+def check_web_seed(url):
+    """The site stores a direct listing's web seed (BEP 19 base URL) as given; only its form is checked here."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password:
+        raise SeedError("--web-seed must be an https:// URL without a user name or password")
+
+
+def submit_new(
+    repo,
+    src,
+    revision,
+    key,
+    *,
+    name=None,
+    out=None,
+    direct=False,
+    license=None,
+    web_seed=None,
+    dry_run=False,
+    command="pf seed",
+):
+    """Package src, check it against Hugging Face (unless direct), start seeding, then submit.
+    A dry run stops before the torrent client and the POST, and prints what it would send."""
+    check_client_version()
+    name = name or repo.split("/")[1]
+    out = Path(out) if out else SEEDS / name
     save_dir = out / "files"
-    trackers = api.trackers(key)  # the torrent carries this account's seeding tracker
+    answers = Answers(dry_run)
+    # The torrent carries this account's seeding tracker. Trackers are outside the info dict,
+    # so the infohash is the same with or without a key.
+    trackers = api.trackers(key) if key else api.TRACKERS
 
     print(f"==> Selecting files in {src}")
     paths, skipped = package.stage(src, save_dir / name)
@@ -137,36 +178,42 @@ def submit_new(repo, src, revision, key):
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
 
-    # If every Hugging Face LFS hash matches, it's listed right away instead of going to review.
-    print(f"==> Checking against huggingface.co/{repo}")
     licenses = api.licenses()
-    try:
-        commit, card, remote = hub.model(repo, revision)
-        lfs = {p: h for p, (h, is_lfs) in remote.items() if is_lfs}
-        bad = [p for p in lfs if p in sums and sums[p] != lfs[p]]
-        missing = [p for p in lfs if p not in sums]
-        hf_license = hub.license_id(card, licenses)
-        print(
-            f"    revision {commit}: {len(lfs) - len(bad) - len(missing)}/{len(lfs)} LFS files match, license {hf_license}"
-        )
-        for p in bad:
-            print(f"    MISMATCH  {p}")
-        for p in missing:
-            print(f"    not in torrent  {p}")
-        match = bool(lfs) and not bad
-    except Exception as e:
-        print(f"    could not read it from Hugging Face ({e}); the review team will check by hand")
-        commit, hf_license, match = None, "-", False
-
-    if match:
-        revision = commit
-    elif not revision:
-        print("    Hashes don't match Hugging Face, so it goes to manual review.")
-        revision = ask("    Commit ID your copy came from (40 characters): ")
-    if not COMMIT.fullmatch(revision or ""):
-        raise SeedError("need the full 40-character commit ID; rerun with --revision")
-
     ids = [lic["id"] for lic in licenses["licenses"]]
+    match = False
+    if direct:
+        # Direct listing: not on Hugging Face. The revision is the torrent's v1 infohash.
+        print("==> Direct listing: skipping the Hugging Face check")
+        revision, hf_license = revision or v1, license or "-"
+    else:
+        # If every Hugging Face LFS hash matches, it's listed right away instead of going to review.
+        print(f"==> Checking against huggingface.co/{repo}")
+        try:
+            commit, card, remote = hub.model(repo, revision)
+            lfs = {p: h for p, (h, is_lfs) in remote.items() if is_lfs}
+            bad = [p for p in lfs if p in sums and sums[p] != lfs[p]]
+            missing = [p for p in lfs if p not in sums]
+            hf_license = hub.license_id(card, licenses)
+            matched = len(lfs) - len(bad) - len(missing)
+            print(f"    revision {commit}: {matched}/{len(lfs)} LFS files match, license {hf_license}")
+            for p in bad:
+                print(f"    MISMATCH  {p}")
+            for p in missing:
+                print(f"    not in torrent  {p}")
+            match = bool(lfs) and not bad
+        except Exception as e:
+            print(f"    could not read it from Hugging Face ({e}); the review team will check by hand")
+            commit, hf_license = None, "-"
+        if hf_license == "-" and license:
+            hf_license = license
+        if match:
+            revision = commit
+        elif not revision:
+            print("    Hashes don't match Hugging Face, so it goes to manual review.")
+            revision = answers.ask("    Commit ID your copy came from (40 characters): ", "revision")
+        if revision is not None and not COMMIT.fullmatch(revision):
+            raise SeedError("need the full 40-character commit ID; rerun with --revision")
+
     approved = hub.approved_license(repo, licenses)
     if approved and hf_license in (approved, "other", "-"):
         # Approved one by one: with no license on Hugging Face, or "other" for a listed license, it takes the approved one.
@@ -174,12 +221,12 @@ def submit_new(repo, src, revision, key):
     elif hf_license in ids:
         lic = hf_license
     elif hf_license == "-":
-        lic = ask(f"    License ({', '.join(ids)}): ")
-        if lic not in ids:
+        lic = answers.ask(f"    License ({', '.join(ids)}): ", "license")
+        if lic is not None and lic not in ids:
             raise SeedError(f"Pirate Face lists only the licenses at {API}/policy")
     else:
         raise SeedError(f"license is {hf_license}; Pirate Face lists only the licenses at {API}/policy")
-    need = hub.required_file(lic, licenses)
+    need = lic and hub.required_file(lic, licenses)
     if need and need not in sums:
         raise SeedError(
             f"the {lic} license requires {need} in the torrent; download it into the model folder and rerun"
@@ -188,27 +235,15 @@ def submit_new(repo, src, revision, key):
     if match:
         evidence = (
             f"Source: https://huggingface.co/{repo} at revision {revision}. License per model card: {lic}. "
-            "All Hugging Face LFS SHA-256 hashes at that revision match the local copy (checked by pf seed)."
+            f"All Hugging Face LFS SHA-256 hashes at that revision match the local copy (checked by {command})."
         )
+    elif direct:
+        evidence = f"Direct listing: published on Pirate Face by {repo.split('/')[0]} itself, not on Hugging Face. License: {lic}."
     else:
         print("    Where did this copy come from? Links, license proof, and why it's gone from Hugging Face if it is.")
-        evidence = ask("    Evidence: ")
-        if len(evidence) < 30:
+        evidence = answers.ask("    Evidence: ", "evidence")
+        if evidence is not None and len(evidence) < 30:
             raise SeedError("evidence needs at least 30 characters")
-
-    # Seed first: a listed magnet is only useful if someone is sharing the files.
-    start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
-
-    print(f"""
-==> Submitting {repo} ({lic}, {len(paths)} files) to {API}. By typing yes you confirm:
-    1. You have the complete files and the right to redistribute them.
-    2. The repository, revision, license, checksums and evidence are accurate, and
-       the files are not malware, mislabeled or tampered with. You take responsibility.
-    3. Pirate Face may review, reject or remove it and respond to takedowns.
-    4. BitTorrent shows your IP to peers, and the torrent has no secrets or personal info.
-    5. You agree to the Terms ({API}/terms#model-torrent-submissions) and Listing policy ({API}/policy).""")
-    if not YES and ask("    Type yes: ") != "yes":
-        raise SeedError(f"not submitted. Your torrent is in {out}; rerun any time")
 
     if len(data) > 3_000_000:
         raise SeedError("the .torrent is over the 3 MB upload limit")
@@ -237,6 +272,26 @@ def submit_new(repo, src, revision, key):
     if readme.is_file() and readme.stat().st_size <= 200_000:
         with contextlib.suppress(UnicodeDecodeError):
             body["readme"] = readme.read_text("utf-8")
+    if web_seed:
+        body["webSeed"] = web_seed
+
+    if dry_run:
+        print_dry_run(body, data, v1, v2, torrent_path, answers.skipped)
+        return
+
+    # Seed first: a listed magnet is only useful if someone is sharing the files.
+    start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
+
+    print(f"""
+==> Submitting {repo} ({lic}, {len(paths)} files) to {API}. By typing yes you confirm:
+    1. You have the complete files and the right to redistribute them.
+    2. The repository, revision, license, checksums and evidence are accurate, and
+       the files are not malware, mislabeled or tampered with. You take responsibility.
+    3. Pirate Face may review, reject or remove it and respond to takedowns.
+    4. BitTorrent shows your IP to peers, and the torrent has no secrets or personal info.
+    5. You agree to the Terms ({API}/terms#model-torrent-submissions) and Listing policy ({API}/policy).""")
+    if not YES and ask("    Type yes: ") != "yes":
+        raise SeedError(f"not submitted. Your torrent is in {out}; rerun any time")
 
     code, answer = api.submit(key, body)
     result = answer.get("status") or answer.get("error") or answer
@@ -248,7 +303,7 @@ def submit_new(repo, src, revision, key):
     elif code == 409:
         print(answer.get("error") or "Already submitted.")
         if answer.get("existing", {}).get("magnet"):
-            print(f"Run `pf seed {repo}` again to seed the listed torrent with these files.")
+            print(f"Run `pf seed {repo}` to seed the listed torrent with these files.")
     elif code == 401:
         KEY_FILE.unlink(missing_ok=True)
         raise SeedError(f"key rejected. Get a new one at {API}/account and rerun")
@@ -257,6 +312,72 @@ def submit_new(repo, src, revision, key):
     else:
         raise SeedError(f"HTTP {code}: {result}")
     print(f"Keep seeding. Your files: {out}")
+
+
+def print_dry_run(body, data, v1, v2, torrent_path, skipped):
+    shown = dict(body, torrent=f"<{len(data)} bytes, base64>")
+    if "readme" in shown:
+        shown["readme"] = f"<README.md, {len(body['readme'])} characters>"
+    print("\n==> Dry run: nothing added to a torrent client, nothing submitted")
+    print(f"    v1 infohash  {v1}")
+    print(f"    v2 infohash  {v2}")
+    print(f"    torrent      {torrent_path}")
+    print(f"    POST {API}/api/community-torrents")
+    print(json.dumps(shown, indent=2))
+    if skipped:
+        print(f"    A real run asks for: {', '.join(skipped)}")
+
+
+UPGRADE = "uvx -p 3.13 --from pirateface@latest pf ..., or pipx upgrade pirateface, or pip install -U pirateface"
+
+
+def check_client_version():
+    """Stop before any hashing if Pirate Face no longer accepts submissions from this version."""
+    minimum = api.min_client_version()
+    if minimum and api.older(api.VERSION, minimum):
+        raise SeedError(
+            f"this is pirateface {api.VERSION}; Pirate Face now needs {minimum} or newer to submit. Upgrade: {UPGRADE}"
+        )
+
+
+def submit(args):
+    """pf submit: package.sh's folder flow. Flags match package.sh."""
+    if not (args.folder and args.repo):
+        raise SeedError("usage: pf submit --repo author/model [options] ./model-folder")
+    if not REPO.fullmatch(args.repo):
+        raise SeedError("--repo must look like author/model")
+    if args.revision and not COMMIT.fullmatch(args.revision):
+        raise SeedError("--revision must be a full 40-character commit ID")
+    if args.name and not re.fullmatch(r"[A-Za-z0-9._-]+", args.name):
+        raise SeedError("--name may only use letters, numbers, . _ -")
+    if args.web_seed:
+        if not args.direct:
+            raise SeedError("--web-seed is only for direct listings (--direct)")
+        check_web_seed(args.web_seed)
+    src = Path(args.folder)
+    if not src.is_dir():
+        raise SeedError(f"{args.folder} is not a folder")
+    src = src.resolve()
+    name = args.name or src.name
+    out = Path(args.out) if args.out else Path.cwd() / f"pirateface-{name}"
+    # A dry run needs no key: without one the torrent gets only the public trackers (same infohash).
+    if args.dry_run:
+        key = os.environ.get("PIRATEFACE_KEY") or (KEY_FILE.read_text().strip() if KEY_FILE.exists() else None)
+    else:
+        key = load_key()
+    submit_new(
+        args.repo,
+        src,
+        args.revision,
+        key,
+        name=name,
+        out=out,
+        direct=args.direct,
+        license=args.license,
+        web_seed=args.web_seed,
+        dry_run=args.dry_run,
+        command="pf submit",
+    )
 
 
 def seed(repo, folder=None, revision=None):
@@ -407,7 +528,9 @@ def run(args):
     global YES
     YES = args.yes
     try:
-        if args.update_trackers:
+        if args.cmd == "submit":
+            submit(args)
+        elif args.update_trackers:
             update_trackers()
         elif args.hf_cache:
             seed_cache()
@@ -415,5 +538,8 @@ def run(args):
             seed(args.repo_id, args.folder, args.revision)
         else:
             raise SeedError("give a repo (author/model), --hf-cache or --update-trackers")
+    except RateLimited as e:
+        print(f"error: {e}", file=sys.stderr)
+        sys.exit(75)  # same code as package.sh, so scripts that loop over models can stop
     except (SeedError, package.LinkError) as e:
         sys.exit(f"error: {e}")
