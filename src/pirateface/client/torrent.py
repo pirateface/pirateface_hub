@@ -1,4 +1,5 @@
 import atexit
+import contextlib
 import os
 import shutil
 import sys
@@ -186,18 +187,43 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
     h = _handle(repo_id)
     if h is None:
         raise Unavailable()
+    # A model download fetches files one at a time. After a file completes the
+    # torrent goes "finished" and libtorrent drops the web seed, so the next
+    # file never gets bytes and stalls until PF_STALL_TIMEOUT. Re-add a fresh
+    # handle (metadata is cached on disk) so the web seed connects cleanly.
+    with _lock:
+        prior = _handles.get(repo_id)
+    if prior is not None:
+        finished = False
+        try:
+            finished = prior.status().state == lt.torrent_status.finished
+        except Exception:
+            finished = False
+        if finished:
+            with _lock:
+                with contextlib.suppress(Exception):
+                    _get_session().remove_torrent(prior)
+                _handles.pop(repo_id, None)
+            h = _handle(repo_id)
+            if h is None:
+                raise Unavailable()
+            with contextlib.suppress(Exception):
+                h.resume()
+                h.force_reannounce()
+            time.sleep(0.5)
+
+    assert h is not None
     ti = h.torrent_file()
     i = _file_index(ti, filename)
     if i is None:
         raise Unavailable("not in the torrent")
     size = ti.files().file_size(i)
     path = Path(h.status().save_path) / ti.files().file_path(i)
-    # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
-    # libtorrent applies them lazily, so reading them back across threads loses updates.
+    # Track only this file for this fetch so the status bar and priorities
+    # reflect the current download; a fresh handle is used for the next file.
     with _lock:
-        wanted = _wanted.setdefault(repo_id, set())
-        wanted.add(i)
-        h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+        _wanted[repo_id] = {i}
+        h.prioritize_files([4 if f == i else 0 for f in range(ti.num_files())])
 
     last_done, last_change = -1, time.monotonic()
     while True:
