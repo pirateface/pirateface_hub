@@ -147,10 +147,21 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
         time.sleep(every)
         with _lock:
             wanted = list(_wanted.get(repo_id, ()))
-        progress = h.file_progress(lt.torrent_handle.piece_granularity)
-        total = sum(fs.file_size(i) for i in wanted)
-        done = sum(min(progress[i], fs.file_size(i)) for i in wanted)
-        files_done = sum(progress[i] >= fs.file_size(i) for i in wanted)
+            current = _handles.get(repo_id)
+        # Stop if this handle was replaced (e.g. re-added after going finished).
+        if current is not h:
+            if bar is not None:
+                bar.close()
+            return
+        try:
+            progress = h.file_progress(lt.torrent_handle.piece_granularity)
+            total = sum(fs.file_size(i) for i in wanted)
+            done = sum(min(progress[i], fs.file_size(i)) for i in wanted)
+            files_done = sum(progress[i] >= fs.file_size(i) for i in wanted)
+        except Exception:
+            if bar is not None:
+                bar.close()
+            return
         if not wanted or files_done == len(wanted):
             if bar is not None:
                 bar.close()
