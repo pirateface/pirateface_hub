@@ -250,9 +250,12 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
         if h.status().state == lt.torrent_status.finished:
             # Another fetch may still be flushing its last file on this handle;
             # wait for it to finish rather than prioritising into a finished torrent.
+            # The count only ever drains (every fetch decrements in a finally), so
+            # waiting is bounded by the other fetch's own flush/stall deadline.
             with _idle_cv:
-                _idle_cv.wait_for(lambda: not _active.get(repo_id), timeout=30)
-                idle = not _active.get(repo_id)
+                while _active.get(repo_id):
+                    _idle_cv.wait(5)
+            idle = True
         else:
             idle = False
         if idle and h.status().state == lt.torrent_status.finished:
