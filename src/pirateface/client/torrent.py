@@ -237,55 +237,61 @@ def _file_index(ti, filename):
 
 
 def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
-    with _setup_lock(repo_id):
-        h = _handle(repo_id)
-        if h is None:
-            raise Unavailable()
-        # A model download fetches files one at a time. After the last wanted file
-        # completes the torrent goes "finished" and libtorrent drops the web seed,
-        # so the next file never gets bytes and stalls until PF_STALL_TIMEOUT.
-        # Re-add the handle (with resume data, so nothing already on disk is
-        # re-hashed) -- but only while no other fetch is using it, so parallel
-        # calls never yank a handle out from under each other.
-        if h.status().state == lt.torrent_status.finished:
-            # Another fetch may still be flushing its last file on this handle;
-            # wait for it to finish rather than prioritising into a finished torrent.
-            # The count only ever drains (every fetch decrements in a finally), so
-            # waiting is bounded by the other fetch's own flush/stall deadline.
-            with _idle_cv:
-                while _active.get(repo_id):
-                    _idle_cv.wait(5)
-            idle = True
-        else:
-            idle = False
-        if idle and h.status().state == lt.torrent_status.finished:
-            resume = _resume_data(h)
-            with _lock:
-                with contextlib.suppress(Exception):
-                    _get_session().remove_torrent(h)
-                _handles.pop(repo_id, None)
-            h = _handle(repo_id, resume)
+    counted = False
+    h = None
+    ti = None
+    i = None
+    try:
+        with _setup_lock(repo_id):
+            h = _handle(repo_id)
             if h is None:
                 raise Unavailable()
+            # A model download fetches files one at a time. After the last wanted file
+            # completes the torrent goes "finished" and libtorrent drops the web seed,
+            # so the next file never gets bytes and stalls until PF_STALL_TIMEOUT.
+            # Re-add the handle (with resume data, so nothing already on disk is
+            # re-hashed) -- but only while no other fetch is using it, so parallel
+            # calls never yank a handle out from under each other.
+            if h.status().state == lt.torrent_status.finished:
+                # Another fetch may still be flushing its last file on this handle;
+                # wait for it to finish rather than prioritising into a finished torrent.
+                # Every counted fetch decrements in a finally, so this always drains --
+                # though it can take as long as the other fetch's flush and metadata
+                # waits plus any wait behind the global flush lock.
+                with _idle_cv:
+                    while _active.get(repo_id):
+                        _idle_cv.wait(5)
+                idle = True
+            else:
+                idle = False
+            if idle and h.status().state == lt.torrent_status.finished:
+                resume = _resume_data(h)
+                with _lock:
+                    with contextlib.suppress(Exception):
+                        _get_session().remove_torrent(h)
+                    _handles.pop(repo_id, None)
+                h = _handle(repo_id, resume)
+                if h is None:
+                    raise Unavailable()
 
-        ti = h.torrent_file()
-        i = _file_index(ti, filename)
-        if i is None:
-            raise Unavailable("not in the torrent")
-        size = ti.files().file_size(i)
-        path = Path(h.status().save_path) / ti.files().file_path(i)
-        # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
-        # libtorrent applies them lazily, so reading them back across threads loses updates.
-        # Keep accumulating wanted files: from_pretrained fetches several files in parallel.
-        with _lock:
-            wanted = _wanted.setdefault(repo_id, set())
-            wanted.add(i)
-            h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
-            # Counted only after the priorities are in place: an exception above
-            # must not leave a phantom in-flight fetch behind.
-            _active[repo_id] = _active.get(repo_id, 0) + 1
+            ti = h.torrent_file()
+            i = _file_index(ti, filename)
+            if i is None:
+                raise Unavailable("not in the torrent")
+            size = ti.files().file_size(i)
+            path = Path(h.status().save_path) / ti.files().file_path(i)
+            # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
+            # libtorrent applies them lazily, so reading them back across threads loses updates.
+            # Keep accumulating wanted files: from_pretrained fetches several files in parallel.
+            with _lock:
+                wanted = _wanted.setdefault(repo_id, set())
+                wanted.add(i)
+                h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+                # Counted only after the priorities are in place: an exception above
+                # must not leave a phantom in-flight fetch behind.
+                _active[repo_id] = _active.get(repo_id, 0) + 1
+                counted = True
 
-    try:
         last_done, last_change = -1, time.monotonic()
         while True:
             done = h.file_progress(lt.torrent_handle.piece_granularity)[i]
@@ -304,17 +310,19 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
     except BaseException:
         # A failed fetch must not leave its file wanted forever: at priority 4 the
         # torrent never reaches "finished" again, which would disable the re-add path.
-        with _idle_cv:
-            wanted = _wanted.get(repo_id)
-            if wanted is not None and i in wanted and _active.get(repo_id, 0) <= 1:
-                wanted.discard(i)
-                with contextlib.suppress(Exception):
-                    h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+        if counted and h is not None and ti is not None and i is not None:
+            with _idle_cv:
+                wanted = _wanted.get(repo_id)
+                if wanted is not None and i in wanted and _active.get(repo_id, 0) <= 1:
+                    wanted.discard(i)
+                    with contextlib.suppress(Exception):
+                        h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
         raise
     finally:
-        with _idle_cv:
-            _active[repo_id] -= 1
-            _idle_cv.notify_all()
+        if counted:
+            with _idle_cv:
+                _active[repo_id] -= 1
+                _idle_cv.notify_all()
 
 
 def files_in(data):
