@@ -23,6 +23,7 @@ _active = {}  # repo_id -> fetch_file calls currently downloading
 _setup = {}  # repo_id -> lock serialising handle setup
 _resume = {}  # infohash -> bencoded resume data captured from the alert pump
 _resume_cv = threading.Condition()
+_idle_cv = threading.Condition(_lock)  # signalled when a repo's in-flight fetch count drops
 
 
 class Unavailable(Exception):
@@ -79,8 +80,14 @@ def _pump_alerts(session, debug):
 def _cleanup():
     if _session is None:
         return
-    with _lock:
+    # Never block interpreter exit behind a fetch thread holding _lock (up to
+    # METADATA_TIMEOUT): give up on the snapshot and let the OS reclaim files.
+    if not _lock.acquire(timeout=1):
+        return
+    try:
         handles = [h for h in _handles.values() if h is not None]
+    finally:
+        _lock.release()
     for h in handles:
         with contextlib.suppress(Exception):
             path = Path(h.status().save_path) / h.torrent_file().name()
@@ -183,6 +190,8 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
                 current = _handles.get(repo_id)
             # Stop if this handle was replaced (e.g. re-added after going finished).
             if current is not h:
+                if bar is not None:
+                    bar.close()
                 return
             fs = h.torrent_file().files()
             progress = h.file_progress(lt.torrent_handle.piece_granularity)
@@ -238,8 +247,14 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
         # Re-add the handle (with resume data, so nothing already on disk is
         # re-hashed) -- but only while no other fetch is using it, so parallel
         # calls never yank a handle out from under each other.
-        with _lock:
-            idle = not _active.get(repo_id)
+        if h.status().state == lt.torrent_status.finished:
+            # Another fetch may still be flushing its last file on this handle;
+            # wait for it to finish rather than prioritising into a finished torrent.
+            with _idle_cv:
+                _idle_cv.wait_for(lambda: not _active.get(repo_id), timeout=30)
+                idle = not _active.get(repo_id)
+        else:
+            idle = False
         if idle and h.status().state == lt.torrent_status.finished:
             resume = _resume_data(h)
             with _lock:
@@ -283,9 +298,20 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
             time.sleep(0.25)
         _flush_to_disk(h)
         return path
+    except BaseException:
+        # A failed fetch must not leave its file wanted forever: at priority 4 the
+        # torrent never reaches "finished" again, which would disable the re-add path.
+        with _idle_cv:
+            wanted = _wanted.get(repo_id)
+            if wanted is not None and i in wanted and _active.get(repo_id, 0) <= 1:
+                wanted.discard(i)
+                with contextlib.suppress(Exception):
+                    h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+        raise
     finally:
-        with _lock:
+        with _idle_cv:
             _active[repo_id] -= 1
+            _idle_cv.notify_all()
 
 
 def files_in(data):
