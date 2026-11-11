@@ -230,11 +230,13 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
         raise Unavailable("not in the torrent")
     size = ti.files().file_size(i)
     path = Path(h.status().save_path) / ti.files().file_path(i)
-    # Track only this file for this fetch so the status bar and priorities
-    # reflect the current download; a fresh handle is used for the next file.
+    # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
+    # libtorrent applies them lazily, so reading them back across threads loses updates.
+    # Keep accumulating wanted files: from_pretrained fetches several files in parallel.
     with _lock:
-        _wanted[repo_id] = {i}
-        h.prioritize_files([4 if f == i else 0 for f in range(ti.num_files())])
+        wanted = _wanted.setdefault(repo_id, set())
+        wanted.add(i)
+        h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
 
     last_done, last_change = -1, time.monotonic()
     while True:
