@@ -19,6 +19,10 @@ _lock = threading.Lock()
 _session = None
 _handles = {}  # repo_id -> handle, or None if not on Pirate Face
 _wanted = {}
+_active = {}  # repo_id -> fetch_file calls currently downloading
+_setup = {}  # repo_id -> lock serialising handle setup
+_resume = {}  # infohash -> bencoded resume data captured from the alert pump
+_resume_cv = threading.Condition()
 
 
 class Unavailable(Exception):
@@ -61,6 +65,10 @@ def _pump_alerts(session, debug):
                     key = str(a.handle.info_hashes().v1)
                     _flush_done[key] = _flush_done.get(key, 0) + 1
                     _flush.notify_all()
+            if isinstance(a, lt.save_resume_data_alert):
+                with _resume_cv:
+                    _resume[str(a.handle.info_hashes().v1)] = lt.bencode(a.resume_data)
+                    _resume_cv.notify_all()
             if debug:
                 msg = a.message()
                 if not any(k in msg or k in type(a).__name__ for k in noisy):
@@ -69,15 +77,18 @@ def _pump_alerts(session, debug):
 
 @atexit.register
 def _cleanup():
-    for h in _handles.values():
-        if h is None:
-            continue
-        path = Path(h.status().save_path) / h.torrent_file().name()
-        _session.remove_torrent(h)
-        if path.is_dir():
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            path.unlink(missing_ok=True)
+    if _session is None:
+        return
+    with _lock:
+        handles = [h for h in _handles.values() if h is not None]
+    for h in handles:
+        with contextlib.suppress(Exception):
+            path = Path(h.status().save_path) / h.torrent_file().name()
+            _session.remove_torrent(h)
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
 
 
 def _flush_to_disk(h, timeout=30):
@@ -89,7 +100,24 @@ def _flush_to_disk(h, timeout=30):
             raise TimeoutError("libtorrent didn't confirm the file was written to disk")
 
 
-def _handle(repo_id):
+def _resume_data(h, timeout=10):
+    """Bencoded resume data, so a re-added handle trusts what is already on disk instead of re-hashing it."""
+    key = str(h.info_hashes().v1)
+    with _resume_cv:
+        _resume.pop(key, None)
+        h.save_resume_data()
+        if not _resume_cv.wait_for(lambda: key in _resume, timeout):
+            return None
+        return _resume.pop(key)
+
+
+def _setup_lock(repo_id):
+    """Serialises handle creation/re-add per repo so parallel fetches share one handle."""
+    with _lock:
+        return _setup.setdefault(repo_id, threading.Lock())
+
+
+def _handle(repo_id, resume=None):
     with _lock:
         if repo_id in _handles:
             return _handles[repo_id]
@@ -111,6 +139,11 @@ def _handle(repo_id):
             _save_torrent_file(repo_id, saved, str(atp.info_hashes.v1))
         if saved.exists():
             atp.ti = lt.torrent_info(str(saved))
+        if resume:
+            ra = lt.read_resume_data(resume)
+            atp.have_pieces = ra.have_pieces
+            atp.verified_pieces = ra.verified_pieces
+            atp.unfinished_pieces = ra.unfinished_pieces
         h = _get_session().add_torrent(atp)
         deadline = time.monotonic() + config.METADATA_TIMEOUT
         while not h.status().has_metadata:
@@ -139,49 +172,49 @@ def _save_torrent_file(repo_id, saved, infohash):
 
 def _show_status(repo_id, h, every=0.5, recent=3.0):
     """Sources = who sent bytes recently, not who is connected: the web seed reconnects per file and flickers."""
-    fs = h.torrent_file().files()
     sent = {}
     last_seen = {}
     bar = None
     while True:
         time.sleep(every)
-        with _lock:
-            wanted = list(_wanted.get(repo_id, ()))
-            current = _handles.get(repo_id)
-        # Stop if this handle was replaced (e.g. re-added after going finished).
-        if current is not h:
-            if bar is not None:
-                bar.close()
-            return
         try:
+            with _lock:
+                wanted = list(_wanted.get(repo_id, ()))
+                current = _handles.get(repo_id)
+            # Stop if this handle was replaced (e.g. re-added after going finished).
+            if current is not h:
+                return
+            fs = h.torrent_file().files()
             progress = h.file_progress(lt.torrent_handle.piece_granularity)
             total = sum(fs.file_size(i) for i in wanted)
             done = sum(min(progress[i], fs.file_size(i)) for i in wanted)
             files_done = sum(progress[i] >= fs.file_size(i) for i in wanted)
+            if not wanted or files_done == len(wanted):
+                if bar is not None:
+                    bar.close()
+                    bar = None
+                continue
+            now = time.monotonic()
+            for p in h.get_peer_info():
+                conn = tuple(p.ip)
+                if p.total_download > sent.get(conn, 0):
+                    last_seen[(conn[0], p.connection_type != lt.peer_info.standard_bittorrent)] = now
+                sent[conn] = p.total_download
+            active = [web for (_, web), t in last_seen.items() if now - t < recent]
+            label = ui.sources_label(any(active), active.count(False))
+            if bar is None:
+                bar = ui.repo_progress(repo_id)
+            bar.total, bar.n = total, done
+            ui.set_status(
+                bar,
+                f"{files_done}/{len(wanted)} files · {done / 1e6:.1f}/{total / 1e6:.1f} MB · {label} · {h.status().download_rate / 1e6:.1f} MB/s",
+            )
         except Exception:
+            # The handle can disappear while this thread is reading it; the download
+            # thread reports real failures, so stop quietly here.
             if bar is not None:
                 bar.close()
             return
-        if not wanted or files_done == len(wanted):
-            if bar is not None:
-                bar.close()
-                bar = None
-            continue
-        now = time.monotonic()
-        for p in h.get_peer_info():
-            conn = tuple(p.ip)
-            if p.total_download > sent.get(conn, 0):
-                last_seen[(conn[0], p.connection_type != lt.peer_info.standard_bittorrent)] = now
-            sent[conn] = p.total_download
-        active = [web for (_, web), t in last_seen.items() if now - t < recent]
-        label = ui.sources_label(any(active), active.count(False))
-        if bar is None:
-            bar = ui.repo_progress(repo_id)
-        bar.total, bar.n = total, done
-        ui.set_status(
-            bar,
-            f"{files_done}/{len(wanted)} files · {done / 1e6:.1f}/{total / 1e6:.1f} MB · {label} · {h.status().download_rate / 1e6:.1f} MB/s",
-        )
 
 
 def _file_index(ti, filename):
@@ -195,64 +228,64 @@ def _file_index(ti, filename):
 
 
 def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
-    h = _handle(repo_id)
-    if h is None:
-        raise Unavailable()
-    # A model download fetches files one at a time. After a file completes the
-    # torrent goes "finished" and libtorrent drops the web seed, so the next
-    # file never gets bytes and stalls until PF_STALL_TIMEOUT. Re-add a fresh
-    # handle (metadata is cached on disk) so the web seed connects cleanly.
-    with _lock:
-        prior = _handles.get(repo_id)
-    if prior is not None:
-        finished = False
-        try:
-            finished = prior.status().state == lt.torrent_status.finished
-        except Exception:
-            finished = False
-        if finished:
+    with _setup_lock(repo_id):
+        h = _handle(repo_id)
+        if h is None:
+            raise Unavailable()
+        # A model download fetches files one at a time. After the last wanted file
+        # completes the torrent goes "finished" and libtorrent drops the web seed,
+        # so the next file never gets bytes and stalls until PF_STALL_TIMEOUT.
+        # Re-add the handle (with resume data, so nothing already on disk is
+        # re-hashed) -- but only while no other fetch is using it, so parallel
+        # calls never yank a handle out from under each other.
+        with _lock:
+            idle = not _active.get(repo_id)
+        if idle and h.status().state == lt.torrent_status.finished:
+            resume = _resume_data(h)
             with _lock:
                 with contextlib.suppress(Exception):
-                    _get_session().remove_torrent(prior)
+                    _get_session().remove_torrent(h)
                 _handles.pop(repo_id, None)
-            h = _handle(repo_id)
+            h = _handle(repo_id, resume)
             if h is None:
                 raise Unavailable()
-            with contextlib.suppress(Exception):
-                h.resume()
-                h.force_reannounce()
-            time.sleep(0.5)
 
-    assert h is not None
-    ti = h.torrent_file()
-    i = _file_index(ti, filename)
-    if i is None:
-        raise Unavailable("not in the torrent")
-    size = ti.files().file_size(i)
-    path = Path(h.status().save_path) / ti.files().file_path(i)
-    # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
-    # libtorrent applies them lazily, so reading them back across threads loses updates.
-    # Keep accumulating wanted files: from_pretrained fetches several files in parallel.
-    with _lock:
-        wanted = _wanted.setdefault(repo_id, set())
-        wanted.add(i)
-        h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+        ti = h.torrent_file()
+        i = _file_index(ti, filename)
+        if i is None:
+            raise Unavailable("not in the torrent")
+        size = ti.files().file_size(i)
+        path = Path(h.status().save_path) / ti.files().file_path(i)
+        # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:
+        # libtorrent applies them lazily, so reading them back across threads loses updates.
+        # Keep accumulating wanted files: from_pretrained fetches several files in parallel.
+        with _lock:
+            wanted = _wanted.setdefault(repo_id, set())
+            wanted.add(i)
+            h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+            # Counted only after the priorities are in place: an exception above
+            # must not leave a phantom in-flight fetch behind.
+            _active[repo_id] = _active.get(repo_id, 0) + 1
 
-    last_done, last_change = -1, time.monotonic()
-    while True:
-        done = h.file_progress(lt.torrent_handle.piece_granularity)[i]
-        if done >= size:
-            break
-        st = h.status()
-        if st.errc.value():
-            raise RuntimeError(f"torrent error: {st.errc.message()}")
-        if done != last_done:
-            last_done, last_change = done, time.monotonic()
-        elif time.monotonic() - last_change > stall_timeout:
-            raise TimeoutError(f"stalled for {stall_timeout:.0f}s")
-        time.sleep(0.25)
-    _flush_to_disk(h)
-    return path
+    try:
+        last_done, last_change = -1, time.monotonic()
+        while True:
+            done = h.file_progress(lt.torrent_handle.piece_granularity)[i]
+            if done >= size:
+                break
+            st = h.status()
+            if st.errc.value():
+                raise RuntimeError(f"torrent error: {st.errc.message()}")
+            if done != last_done:
+                last_done, last_change = done, time.monotonic()
+            elif time.monotonic() - last_change > stall_timeout:
+                raise TimeoutError(f"stalled for {stall_timeout:.0f}s")
+            time.sleep(0.25)
+        _flush_to_disk(h)
+        return path
+    finally:
+        with _lock:
+            _active[repo_id] -= 1
 
 
 def files_in(data):
