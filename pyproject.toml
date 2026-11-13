@@ -38,7 +38,7 @@ packages = ["src/pirateface"]
 "src/pirateface.pth" = "pirateface.pth"
 
 [dependency-groups]
-dev = ["ruff>=0.6", "pytest>=8"]
+dev = ["ruff>=0.6"]
 
 [tool.ruff]
 line-length = 120
@@ -47,7 +47,3 @@ line-length = 120
 extend-select = ["B", "I", "UP", "SIM", "PTH", "RUF"]
 # Broad excepts are deliberate: any failure falls back to Hugging Face.
 ignore = ["BLE001"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests"]
