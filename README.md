@@ -36,6 +36,7 @@ There's also a small CLI:
 pf download org/model [--revision REV] [--local-dir DIR]
 pf seed org/model [FOLDER]
 pf submit --repo org/model [--dry-run] FOLDER
+pf restore FILE.torrent|FOLDER [...]
 ```
 
 ## Share a model
@@ -81,6 +82,30 @@ It asks once for your key from [pirateface.co/account](https://pirateface.co/acc
 | `HF_TOKEN` | For gated repos |
 | `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
 | `QBT_URL`, `QBT_USER`, `QBT_PASS` | qBittorrent Web UI (default `http://localhost:8080`) |
+
+## Restore a torrent
+
+If a listed torrent on Pirate Face is missing its `.torrent` metadata and magnets stall, upload your `.torrent`
+file(s) or point `pf restore` at your torrent client's backup folder:
+
+```sh
+pf restore path/to/model.torrent [more.torrent ...]
+pf restore ~/.local/share/qBittorrent/BT_backup
+```
+
+It prints per file whether metadata was restored, already present, or not listed. Uses the same `PIRATEFACE_KEY`
+as `pf seed`.
+
+Where clients store `.torrent` files:
+
+- **qBittorrent (`BT_backup`):**
+  - Linux: `~/.local/share/qBittorrent/BT_backup/`
+  - macOS: `~/Library/Application Support/qBittorrent/BT_backup/`
+  - Windows: `%LOCALAPPDATA%\qBittorrent\BT_backup\`
+- **Transmission (`torrents/`):**
+  - Linux: `~/.config/transmission/torrents/` (daemon: `/var/lib/transmission-daemon/.config/transmission-daemon/torrents/`)
+  - macOS: `~/Library/Application Support/Transmission/Torrents/`
+  - Windows: `%LOCALAPPDATA%\transmission\Torrents\`
 
 ## Models only on Pirate Face
 

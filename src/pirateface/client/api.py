@@ -131,6 +131,28 @@ def submit(key, body):
             return e.code, {"error": e.reason}
 
 
+def restore(key, data):
+    """POST raw .torrent bytes to /api/torrents/restore. Returns (HTTP status, JSON answer)."""
+    req = urllib.request.Request(
+        f"{API}/api/torrents/restore",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/x-bittorrent",
+            "User-Agent": f"pirateface/{VERSION}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.load(e)
+        except Exception:
+            return e.code, {"error": e.reason}
+
+
 _rescues = []
 
 
