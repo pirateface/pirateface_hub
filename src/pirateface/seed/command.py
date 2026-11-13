@@ -24,6 +24,7 @@ SEEDS = Path(os.environ.get("PIRATEFACE_SEEDS") or Path.home() / "pirateface-see
 HOURLY_LIMIT = 200  # submissions per account per hour, enforced by the site
 REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 COMMIT = re.compile(r"[0-9a-fA-F]{40}")
+WEIGHT = re.compile(r"\.(safetensors|gguf|onnx|bin|pt|pth|ckpt|mlx|npz)$", re.IGNORECASE)  # as the site keys a quant
 YES = False
 
 
@@ -101,17 +102,38 @@ def start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wa
     print("    Keep it running. BitTorrent shows your IP address to other peers.")
 
 
+def weights(src, paths):
+    """The weight files (each quant's own files) among paths that src has."""
+    return {p for p in paths if WEIGHT.search(p) and Path(src, p).is_file()} if src else set()
+
+
+def matching_quant(repo, src):
+    """The listed quant whose weight files src has most of, or None for the default torrent.
+    A revision can have one torrent per quant (say UD-Q8_K_XL and UD-IQ4_XS)."""
+    entry = api.lookup(repo)
+    quants = (entry.get("quants") or []) if isinstance(entry, dict) else []
+    best = max(quants, key=lambda q: len(weights(src, [f["path"] for f in q["files"]])), default=None)
+    return best["quant"] if len(quants) > 1 and weights(src, [f["path"] for f in best["files"]]) else None
+
+
 def seed_listed(repo, src, key):
     """Seed the torrent Pirate Face already lists, with whatever files src has."""
-    data = api.torrent_file(repo)
+    data = api.torrent_file(repo, matching_quant(repo, src))
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
+    paths = [p for p, _, _ in torrent.files_in(data)]
+    mine = weights(src, [str(p.relative_to(src)) for p in Path(src).rglob("*")]) if src else set()
+    if mine and not weights(src, paths):
+        # Another quant of this revision: seeding the listed torrent would download it instead.
+        raise SeedError(
+            f"Pirate Face doesn't list your files for {repo} yet ({', '.join(sorted(mine)[:3])}). "
+            f"Submit them as their own torrent: pf submit --repo {repo} {src}"
+        )
     trackers = api.trackers(key)
     data = package.with_trackers(data, trackers)
     name, v1, v2, single = package.info(data)
     out = SEEDS / repo.split("/")[1]
     save_dir = out / "files"
-    paths = [p for p, _, _ in torrent.files_in(data)]
     have = package.link_existing(src, save_dir if single else save_dir / name, paths) if src else 0
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
@@ -309,7 +331,10 @@ def submit_new(
     elif code == 409:
         print(answer.get("error") or "Already submitted.")
         if answer.get("existing", {}).get("magnet"):
-            print(f"Run `pf seed {repo}` to seed the listed torrent with these files.")
+            # The torrent just added is not listed: the listed one has these files.
+            print(f"Remove {torrent_path.name} from your torrent client; Pirate Face does not list it.")
+            print(f"Then run `pf seed {repo} {src}` to seed the listed torrent with these files.")
+            return
     elif code == 401:
         KEY_FILE.unlink(missing_ok=True)
         raise SeedError(f"key rejected. Get a new one at {API}/account and rerun")
