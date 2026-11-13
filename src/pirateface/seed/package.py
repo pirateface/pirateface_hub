@@ -6,7 +6,7 @@ import os
 import re
 import shutil
 import urllib.parse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import libtorrent as lt
 
@@ -71,6 +71,25 @@ def stage(src, dest):
     for rel in sorted(included):
         link(Path(src, rel).absolute(), dest / rel)
     return sorted(included), sorted(skipped)
+
+
+def stage_files(files, dest):
+    """Link selected source files into dest under explicit torrent-relative paths."""
+    shutil.rmtree(dest, ignore_errors=True)
+    included, skipped = [], []
+    for rel, source in files.items():
+        path = PurePosixPath(rel)
+        if path.is_absolute() or "\\" in rel or any(part in ("", ".", "..") for part in path.parts):
+            raise LinkError(f"invalid torrent path: {rel!r}")
+        (skipped if SKIP.search(rel) else included).append((rel, Path(source)))
+    problems = unportable(sorted(rel for rel, _ in included))
+    if problems:
+        raise LinkError("rename or remove these files first:\n    " + "\n    ".join(problems[:20]))
+    for rel, source in sorted(included):
+        if not source.is_file():
+            raise LinkError(f"source file is missing: {source}")
+        link(source.absolute(), dest / rel)
+    return sorted(rel for rel, _ in included), sorted(skipped)
 
 
 def link_existing(src, dest, paths):

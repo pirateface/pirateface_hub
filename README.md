@@ -37,7 +37,41 @@ pf download org/model [--revision REV] [--local-dir DIR]
 pf seed org/model [FOLDER]
 pf submit --repo org/model [--dry-run] FOLDER
 pf restore FILE.torrent|FOLDER [...]
+pf watch [--comfyui MODELS_DIR] [--ollama MODELS_DIR] --owner NAME --license ID
 ```
+
+## Watch ComfyUI and Ollama folders
+
+`pf watch` can poll local model stores and make direct Pirate Face listings for newly discovered files.
+ComfyUI models are shared one supported weight file per listing, with their path under `models/` kept
+inside the torrent. Ollama models are shared one manifest at a time, together with its config and every
+blob referenced by that manifest. The Ollama path must be the model store containing `manifests/` and
+`blobs/` (often `~/.ollama/models` or the value of `OLLAMA_MODELS`).
+
+Start with a read-only inventory:
+
+```sh
+pf watch \
+  --comfyui ~/ComfyUI/models \
+  --ollama "${OLLAMA_MODELS:-$HOME/.ollama/models}" \
+  --owner YOUR_HUGGING_FACE_NAME \
+  --license apache-2.0 \
+  --once --dry-run
+```
+
+The selected license applies to every model found by that watcher. Use a directory containing only
+models you have the right to redistribute under that license. To watch continuously and review each
+candidate before submitting it, omit `--once --dry-run`. Add `--yes` only when you want every eligible
+new model submitted without per-model prompts; this also accepts Pirate Face's submission terms for
+each submission. `--interval` sets the polling period (default 60 seconds), and `--settle` waits until
+files have stopped changing for the given number of seconds (default 60).
+
+Processed and declined files are recorded in `$PIRATEFACE_SEEDS/.watch-state.json` (or
+`~/pirateface-seeds/.watch-state.json` when `PIRATEFACE_SEEDS` is unset). Use `--state` to choose another
+state file; remove an entry to retry a declined model. The watcher only reads source files; its seed
+files link back to them, so keep the original model files available while seeding. ComfyUI torrents retain their relative model
+paths. Ollama torrents include `manifests/` and `blobs/`; merge those folders into an Ollama model
+store to restore a downloaded model.
 
 ## Share a model
 

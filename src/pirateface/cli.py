@@ -51,6 +51,22 @@ def main():
     )
     r.add_argument("paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)")
     r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
+    w = sub.add_parser(
+        "watch",
+        help="watch ComfyUI and/or Ollama model folders and share new models",
+        description="Poll local model folders. ComfyUI weight files and complete Ollama manifests are packaged as "
+        "direct Pirate Face listings under your account namespace.",
+    )
+    w.add_argument("--comfyui", metavar="MODELS_DIR", help="ComfyUI models folder (for example ComfyUI/models)")
+    w.add_argument("--ollama", metavar="MODELS_DIR", help="Ollama models store (the folder containing manifests/ and blobs/)")
+    w.add_argument("--owner", required=True, help="your Hugging Face username or organization")
+    w.add_argument("--license", required=True, help="Pirate Face license ID to apply to every watched model")
+    w.add_argument("--interval", type=float, default=60, help="seconds between scans (default: 60)")
+    w.add_argument("--settle", type=float, default=60, help="ignore files modified within this many seconds (default: 60)")
+    w.add_argument("--state", help="watch state file (default: $PIRATEFACE_SEEDS/.watch-state.json)")
+    w.add_argument("--once", action="store_true", help="scan once, then exit")
+    w.add_argument("--dry-run", action="store_true", help="list candidates only; requires --once")
+    w.add_argument("-y", "--yes", action="store_true", help="submit every eligible new model without per-model prompts")
     args = p.parse_args()
 
     if args.cmd == "restore":
@@ -62,6 +78,11 @@ def main():
         from pirateface.seed import command
 
         return command.run(args)
+
+    if args.cmd == "watch":
+        from pirateface.seed import watch
+
+        return watch.run(args)
 
     from huggingface_hub import snapshot_download
 

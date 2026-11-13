@@ -69,10 +69,10 @@ def check_client_version():
         )
 
 
-def build_torrent(src, save_dir, name, trackers):
+def build_torrent(src, save_dir, name, trackers, files=None):
     """Stage src's files under save_dir/name, hash them and make the torrent. Returns (paths, sha256s, torrent, v1, v2)."""
     print(f"==> Selecting files in {src}")
-    paths, skipped = package.stage(src, save_dir / name)
+    paths, skipped = package.stage(src, save_dir / name) if files is None else package.stage_files(files, save_dir / name)
     for p in skipped:
         print(f"    skip  {p}")
     if not paths:
@@ -239,6 +239,7 @@ def submit_new(
     web_seed=None,
     dry_run=False,
     command="pf seed",
+    files=None,
 ):
     """Package src, check it against Hugging Face (unless direct), start seeding, then submit.
     A dry run stops before the torrent client and the POST, and prints what it would send."""
@@ -251,7 +252,7 @@ def submit_new(
     # so the infohash is the same with or without a key.
     trackers = api.trackers(key) if key else api.TRACKERS
 
-    paths, sums, data, v1, v2 = build_torrent(src, save_dir, name, trackers)
+    paths, sums, data, v1, v2 = build_torrent(src, save_dir, name, trackers, files=files)
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
 
