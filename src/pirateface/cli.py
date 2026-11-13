@@ -44,7 +44,19 @@ def main():
     u.add_argument("--web-seed", help="direct listings: https base URL serving BASE/NAME/PATH (BEP 19)")
     u.add_argument("--dry-run", action="store_true", help="build and print everything; add nothing, submit nothing")
     u.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
+    r = sub.add_parser(
+        "restore",
+        help="restore missing .torrent metadata on Pirate Face",
+        description="Uploads one or more .torrent files (or a torrent client folder) to restore missing metadata on Pirate Face.",
+    )
+    r.add_argument("paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)")
+    r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
     args = p.parse_args()
+
+    if args.cmd == "restore":
+        from pirateface import restore
+
+        return restore.run(args)
 
     if args.cmd in ("seed", "submit"):
         from pirateface.seed import command
