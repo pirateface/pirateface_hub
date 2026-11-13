@@ -92,7 +92,7 @@ def build(root, trackers, plen=None):
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
     v1 = _V1Pieces(plen)
-    files, tree, layers = [], {}, {}
+    files, tree, layers, pad_index = [], {}, {}, 0
     for parts in paths:
         size, leaves, piece_roots = 0, [], []
         with root.joinpath(*parts).open("rb") as f:
@@ -118,7 +118,8 @@ def build(root, trackers, plen=None):
         files.append({"length": size, "path": parts})
         pad = -size % plen
         if pad and len(paths) > 1:
-            files.append({"attr": "p", "length": pad, "path": [".pad", str(pad)]})
+            pad_index += 1
+            files.append({"attr": "p", "length": pad, "path": [".pad", f"{pad_index}-{pad}"]})
             v1.add(bytes(pad))
     info = {
         "file tree": tree,
