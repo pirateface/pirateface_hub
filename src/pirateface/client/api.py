@@ -17,9 +17,10 @@ NOT_LISTED = object()
 
 
 @functools.cache
-def lookup(repo_id):
-    """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error)."""
-    url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id})
+def lookup(repo_id, quant=None):
+    """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (network error).
+    quant: one of entry["quants"][i]["quant"], when the revision has a torrent per quant."""
+    url = f"{API}/api/torrents?" + urllib.parse.urlencode({"repo": repo_id, **({"quant": quant} if quant else {})})
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             return json.load(r)
@@ -36,9 +37,9 @@ def lookup_magnet(repo_id):
 
 
 @functools.cache
-def torrent_file(repo_id):
-    """The .torrent's bytes if Pirate Face publishes one for the repo, else None."""
-    entry = lookup(repo_id)
+def torrent_file(repo_id, quant=None):
+    """The .torrent's bytes if Pirate Face publishes one for the repo (or that quant), else None."""
+    entry = lookup(repo_id, quant)
     path = entry.get("torrent") if isinstance(entry, dict) else None
     if not path:
         return None

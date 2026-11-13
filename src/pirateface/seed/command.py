@@ -24,6 +24,9 @@ SEEDS = Path(os.environ.get("PIRATEFACE_SEEDS") or Path.home() / "pirateface-see
 HOURLY_LIMIT = 200  # submissions per account per hour, enforced by the site
 REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 COMMIT = re.compile(r"[0-9a-fA-F]{40}")
+WEIGHT = re.compile(r"\.(safetensors|gguf|onnx|bin|pt|pth|ckpt|mlx|npz)$", re.IGNORECASE)  # as the site keys a quant
+SHARD = re.compile(r"-\d{5}-of-(\d{5})\.gguf$")
+EXTRA = re.compile(r"(?:^|/)(?:mmproj|imatrix|mtp|dspark)(?=[-_.])", re.IGNORECASE)  # GGUF extras, not quants
 YES = False
 
 
@@ -101,17 +104,38 @@ def start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wa
     print("    Keep it running. BitTorrent shows your IP address to other peers.")
 
 
+def weights(src, paths):
+    """The weight files (each quant's own files) among paths that src has."""
+    return {p for p in paths if WEIGHT.search(p) and Path(src, p).is_file()} if src else set()
+
+
+def matching_quant(repo, src):
+    """The listed quant whose weight files src has most of, or None for the default torrent.
+    A revision can have one torrent per quant (say UD-Q8_K_XL and UD-IQ4_XS)."""
+    entry = api.lookup(repo)
+    quants = (entry.get("quants") or []) if isinstance(entry, dict) else []
+    best = max(quants, key=lambda q: len(weights(src, [f["path"] for f in q["files"]])), default=None)
+    return best["quant"] if len(quants) > 1 and weights(src, [f["path"] for f in best["files"]]) else None
+
+
 def seed_listed(repo, src, key):
     """Seed the torrent Pirate Face already lists, with whatever files src has."""
-    data = api.torrent_file(repo)
+    data = api.torrent_file(repo, matching_quant(repo, src))
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
+    paths = [p for p, _, _ in torrent.files_in(data)]
+    mine = weights(src, [str(p.relative_to(src)) for p in Path(src).rglob("*")]) if src else set()
+    if mine and not weights(src, paths):
+        # Another quant of this revision: seeding the listed torrent would download it instead.
+        raise SeedError(
+            f"Pirate Face doesn't list your files for {repo} yet ({', '.join(sorted(mine)[:3])}). "
+            f"Submit them as their own torrent: pf submit --repo {repo} {src}"
+        )
     trackers = api.trackers(key)
     data = package.with_trackers(data, trackers)
     name, v1, v2, single = package.info(data)
     out = SEEDS / repo.split("/")[1]
     save_dir = out / "files"
-    paths = [p for p, _, _ in torrent.files_in(data)]
     have = package.link_existing(src, save_dir if single else save_dir / name, paths) if src else 0
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
@@ -309,7 +333,10 @@ def submit_new(
     elif code == 409:
         print(answer.get("error") or "Already submitted.")
         if answer.get("existing", {}).get("magnet"):
-            print(f"Run `pf seed {repo}` to seed the listed torrent with these files.")
+            # The torrent just added is not listed: the listed one has these files.
+            print(f"Remove {torrent_path.name} from your torrent client; Pirate Face does not list it.")
+            print(f"Then run `pf seed {repo} {src}` to seed the listed torrent with these files.")
+            return
     elif code == 401:
         KEY_FILE.unlink(missing_ok=True)
         raise SeedError(f"key rejected. Get a new one at {API}/account and rerun")
@@ -436,11 +463,20 @@ def plan_cache():
         if lic not in ids and not hub.approved_license(repo, licenses):
             yield row("skip", f"license {lic}", size)
             continue
-        missing = bad = 0
+        # A GGUF repo holds many quants: one quant here is complete when every shard of it is.
+        gguf = [p for p in remote if p.endswith(".gguf") and (snap / p).exists()]
+        missing = sum(
+            not (snap / SHARD.sub(f"-{i:05d}-of-{m[1]}.gguf", p)).exists()
+            for p in gguf
+            if (m := SHARD.search(p))
+            for i in range(1, int(m[1]) + 1)
+        )
+        bad = 0
         for p, (want, is_lfs) in remote.items():
             local = snap / p
             if not local.exists():
-                missing += is_lfs  # weights must all be here; a skipped README is fine
+                # Weights must be here (other GGUF quants need not be); a skipped README is fine.
+                missing += is_lfs and not (gguf and p.endswith(".gguf"))
                 continue
             # The snapshot link names the blob by its hash; huggingface_hub 2.x links that blob on to a
             # shared store under another name, so follow one level only.
@@ -461,6 +497,12 @@ def plan_cache():
             yield row("skip", "could not reach Pirate Face", size)
         elif entry is api.NOT_LISTED:
             yield row("submit", "complete, not on Pirate Face yet", size)
+        elif any(
+            remote[p][0] not in {f["sha256"] for q in entry.get("quants") or [entry] for f in q["files"]}
+            for p in remote
+            if WEIGHT.search(p) and not EXTRA.search(p) and (snap / p).exists()
+        ):
+            yield row("submit", "a quant Pirate Face doesn't list yet", size)
         elif entry.get("revision") != rev:
             yield row("skip", "on Pirate Face at another revision", size)
         elif not entry.get("torrent"):
