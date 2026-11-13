@@ -8,8 +8,8 @@ Layout rules libtorrent follows, and so this does:
   with duplicate paths (it logs `duplicate path [.pad/135008]`, the add fails with `unrecognized
   info`); libtorrent 2.1.1 accepts and seeds the same torrent. Pad names are the one difference from
   libtorrent's `info` dictionary, whose create_torrent always writes the bare form; the v1 piece
-  hashes are the same either way. A top-level `.pad` folder in the source is not listed, so a pad's
-  path can never duplicate a real file's.
+  hashes are the same either way. A top-level `.pad` folder in the source is not listed, so a rebuild of
+  an already-seeded folder produces the same torrent again instead of one that lists pad bytes.
 - v2: each file has its own merkle tree of 16 KiB blocks. A file larger than one piece is padded to whole
   pieces (the last piece's leaves padded with zero hashes up to blocks-per-piece) and its piece layer is
   stored in "piece layers". A file of one piece or less hashes only its own blocks. Empty files have no root.
@@ -84,9 +84,10 @@ class _V1Pieces:
 def files_under(root):
     """Relative paths (lists of components) of every file under root, following links, in torrent order.
 
-    A top-level .pad directory is left out. That is where a client that downloaded the torrent writes
-    BEP 47 pad files: zeros the swarm serves anyway, not model files, and naming them here would let a
-    pad's own path duplicate one and make the v1 file list invalid.
+    A top-level .pad directory is left out. Some clients write BEP 47 pad files there when they download,
+    they are zeros the swarm serves anyway rather than model files, and listing them would put pad bytes
+    in the file list: a folder that has already been seeded would then rebuild to a different infohash,
+    and a pad's own path can duplicate a listed file's.
     """
     root = Path(root)
     paths = [list((d / f).relative_to(root).parts) for d, _, names in root.walk(follow_symlinks=True) for f in names]
