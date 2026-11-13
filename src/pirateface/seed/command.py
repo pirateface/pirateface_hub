@@ -25,6 +25,8 @@ HOURLY_LIMIT = 200  # submissions per account per hour, enforced by the site
 REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 WEIGHT = re.compile(r"\.(safetensors|gguf|onnx|bin|pt|pth|ckpt|mlx|npz)$", re.IGNORECASE)  # as the site keys a quant
+SHARD = re.compile(r"-\d{5}-of-(\d{5})\.gguf$")
+EXTRA = re.compile(r"(?:^|/)(?:mmproj|imatrix|mtp|dspark)(?=[-_.])", re.IGNORECASE)  # GGUF extras, not quants
 YES = False
 
 
@@ -461,11 +463,20 @@ def plan_cache():
         if lic not in ids and not hub.approved_license(repo, licenses):
             yield row("skip", f"license {lic}", size)
             continue
-        missing = bad = 0
+        # A GGUF repo holds many quants: one quant here is complete when every shard of it is.
+        gguf = [p for p in remote if p.endswith(".gguf") and (snap / p).exists()]
+        missing = sum(
+            not (snap / SHARD.sub(f"-{i:05d}-of-{m[1]}.gguf", p)).exists()
+            for p in gguf
+            if (m := SHARD.search(p))
+            for i in range(1, int(m[1]) + 1)
+        )
+        bad = 0
         for p, (want, is_lfs) in remote.items():
             local = snap / p
             if not local.exists():
-                missing += is_lfs  # weights must all be here; a skipped README is fine
+                # Weights must be here (other GGUF quants need not be); a skipped README is fine.
+                missing += is_lfs and not (gguf and p.endswith(".gguf"))
                 continue
             # The snapshot link names the blob by its hash; huggingface_hub 2.x links that blob on to a
             # shared store under another name, so follow one level only.
@@ -486,6 +497,12 @@ def plan_cache():
             yield row("skip", "could not reach Pirate Face", size)
         elif entry is api.NOT_LISTED:
             yield row("submit", "complete, not on Pirate Face yet", size)
+        elif any(
+            remote[p][0] not in {f["sha256"] for q in entry.get("quants") or [entry] for f in q["files"]}
+            for p in remote
+            if WEIGHT.search(p) and not EXTRA.search(p) and (snap / p).exists()
+        ):
+            yield row("submit", "a quant Pirate Face doesn't list yet", size)
         elif entry.get("revision") != rev:
             yield row("skip", "on Pirate Face at another revision", size)
         elif not entry.get("torrent"):
