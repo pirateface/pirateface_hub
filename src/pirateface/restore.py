@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from pirateface.client import api
-from pirateface.seed import command
+from pirateface.seed import user
 
 MAX_TORRENT_BYTES = 3_000_000
 
@@ -29,13 +29,13 @@ def _collect(paths):
 
 
 def run(args):
-    command.YES = args.yes
+    user.YES = args.yes
     files = _collect(args.paths)
     if not files:
         sys.exit("error: no .torrent files found")
     try:
-        key = command.load_key()
-    except command.SeedError as e:
+        key = user.load_key()
+    except user.SeedError as e:
         sys.exit(f"error: {e}")
 
     for path in files:
