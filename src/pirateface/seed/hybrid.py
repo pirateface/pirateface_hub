@@ -1,8 +1,15 @@
-"""Hybrid (BitTorrent v1 + v2, BEP 52) torrents in pure Python, byte-identical to libtorrent's create_torrent.
+"""Hybrid (BitTorrent v1 + v2, BEP 52) torrents in pure Python, laid out the way libtorrent's create_torrent does.
 
 Layout rules libtorrent follows, and so this does:
 - Files sorted by path (bytewise per component). Multi-file torrents get a BEP 47 pad file after every
   file that doesn't end on a piece boundary, including the last, so every file starts on a new piece.
+  A pad is named `.pad/<n>-<length>`, n counting from 1. BEP 47 recommends the bare `.pad/<length>`,
+  but two files needing the same padding would then share a path, and Transmission rejects a torrent
+  with duplicate paths (it logs `duplicate path [.pad/135008]`, the add fails with `unrecognized
+  info`); libtorrent 2.1.1 accepts and seeds the same torrent. Pad names are the one difference from
+  libtorrent's `info` dictionary, whose create_torrent always writes the bare form; the v1 piece
+  hashes are the same either way. A top-level `.pad` folder in the source is not listed, so a rebuild of
+  an already-seeded folder produces the same torrent again instead of one that lists pad bytes.
 - v2: each file has its own merkle tree of 16 KiB blocks. A file larger than one piece is padded to whole
   pieces (the last piece's leaves padded with zero hashes up to blocks-per-piece) and its piece layer is
   stored in "piece layers". A file of one piece or less hashes only its own blocks. Empty files have no root.
@@ -75,10 +82,16 @@ class _V1Pieces:
 
 
 def files_under(root):
-    """Relative paths (lists of components) of every file under root, following links, in torrent order."""
+    """Relative paths (lists of components) of every file under root, following links, in torrent order.
+
+    A top-level .pad directory is left out. Some clients write BEP 47 pad files there when they download,
+    they are zeros the swarm serves anyway rather than model files, and listing them would put pad bytes
+    in the file list: a folder that has already been seeded would then rebuild to a different infohash,
+    and a pad's own path can duplicate a listed file's.
+    """
     root = Path(root)
     paths = [list((d / f).relative_to(root).parts) for d, _, names in root.walk(follow_symlinks=True) for f in names]
-    return sorted(paths, key=lambda p: [s.encode() for s in p])
+    return sorted((p for p in paths if p[0] != ".pad"), key=lambda p: [s.encode() for s in p])
 
 
 def build(root, trackers, plen=None):
