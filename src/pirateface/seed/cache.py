@@ -90,7 +90,7 @@ def plan_cache():
             yield row("seed", "on Pirate Face; seed it", size)
 
 
-def seed_cache():
+def seed_cache(per_file=False):
     """Seed or submit every complete model in the Hugging Face cache, asking per model."""
     plan = []
     for r in plan_cache():
@@ -113,10 +113,10 @@ def seed_cache():
             continue
         try:
             if status == "seed":
-                command.seed_listed(repo, snap, key)
+                command.seed_listed(repo, snap, key, per_file)
             else:
                 tries += 1
-                submit.submit_new(repo, snap, rev, key)
+                submit.submit_new(repo, snap, rev, key, per_file=per_file)
         except user.RateLimited:
             later.append(repo)
             tries = HOURLY_LIMIT
