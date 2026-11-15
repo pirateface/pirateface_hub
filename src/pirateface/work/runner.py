@@ -21,9 +21,9 @@ def _consent():
         raise user.SeedError("not started")
 
 
-def _work_once(key, trackers, name):
+def _work_once(key, trackers, name, max_bytes=None):
     """One job. Returns None if nothing was queued, else True if listed, False if the site refused it."""
-    status, job = site.lease(key, name)
+    status, job = site.lease(key, name, max_bytes)
     if status == 204:
         return None
     if status != 200:
@@ -55,9 +55,10 @@ def run(args):
     except user.SeedError as e:
         sys.exit(f"error: {e}")
     trackers = api.trackers(key)
+    max_bytes = None if args.max_size is None else args.max_size * 1024**3
     while True:
         try:
-            listed = _work_once(key, trackers, args.name)
+            listed = _work_once(key, trackers, args.name, max_bytes)
         except (user.SeedError, WorkError) as e:
             sys.exit(
                 f"error: {e}. The lease lapses after 10 minutes without renewal; the request then returns to the queue."
