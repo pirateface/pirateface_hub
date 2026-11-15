@@ -37,8 +37,13 @@ def lease(key):
     return request("POST", "/api/work/lease", key, {})
 
 
-def renew(key, lease_id):
-    return request("POST", "/api/work/lease", key, {"leaseId": lease_id}, timeout=30)
+def renew(key, lease_id, bytes_done=None, bytes_total=None):
+    """Keep a lease. bytes_done and bytes_total are the progress the rescue board draws."""
+    body = {"leaseId": lease_id}
+    if bytes_done is not None:
+        body["bytesDone"] = int(bytes_done)
+        body["bytesTotal"] = int(0 if bytes_total is None else bytes_total)
+    return request("POST", "/api/work/lease", key, body, timeout=30)
 
 
 def complete(key, lease_id, torrent, manifest):

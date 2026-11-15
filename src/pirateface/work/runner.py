@@ -16,7 +16,7 @@ def _consent():
     print(f"""
 ==> pf work: you build the torrent for one queued model at a time. Its files are streamed from
     Hugging Face through memory and not saved. The torrent is listed on Pirate Face under your
-    account, like pf submit, and you earn submission points. Terms: {API}/terms#model-torrent-submissions""")
+    account. You earn 1 point per 10 GB of bytes this check verifies. Terms: {API}/terms#model-torrent-submissions""")
     if not user.YES and user.ask("    Type yes to start: ") != "yes":
         raise user.SeedError("not started")
 

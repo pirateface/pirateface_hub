@@ -7,23 +7,28 @@ from pirateface.seed import hybrid
 from pirateface.work import site, source
 from pirateface.work.errors import WorkError
 
-RENEW_SECONDS = 180  # the site drops a lease after 10 minutes without a renewal
+RENEW_SECONDS = 10  # the rescue board reads this; the site drops a lease after 10 minutes without one
 REPORT_BYTES = 1 << 30
 
 
 class Lease:
-    """Renews the lease while files stream, so a long model keeps its job."""
+    """Renews the lease while files stream, and reports bytes so the rescue board can draw the lane."""
 
-    def __init__(self, key, lease_id):
-        self.key, self.id, self.renewed = key, lease_id, time.monotonic()
+    def __init__(self, key, lease_id, total):
+        self.key, self.id, self.total, self.done = key, lease_id, total, 0
+        self.renewed = 0.0
 
-    def renew_if_due(self):
-        if time.monotonic() - self.renewed < RENEW_SECONDS:
+    def renew(self, force=False):
+        if not force and time.monotonic() - self.renewed < RENEW_SECONDS:
             return
-        status, body = site.renew(self.key, self.id)
+        status, body = site.renew(self.key, self.id, self.done, self.total)
         if status != 200:
             raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
         self.renewed = time.monotonic()
+
+    def note(self, n):
+        self.done += n
+        self.renew()
 
 
 def build(job, key, trackers):
@@ -31,11 +36,12 @@ def build(job, key, trackers):
     repo, revision = job["repoId"], job["revision"]
     files = sorted(job["files"], key=lambda f: [s.encode() for s in f["path"].split("/")])
     total = sum(f["size"] for f in files)
-    lease = Lease(key, job["leaseId"])
+    lease = Lease(key, job["leaseId"], total)
+    lease.renew(force=True)
     sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
 
     def on_read(n):
-        lease.renew_if_due()
+        lease.note(n)
         progress["bytes"] += n
         if progress["bytes"] >= progress["next"]:
             progress["next"] += REPORT_BYTES
@@ -48,6 +54,7 @@ def build(job, key, trackers):
         (f["path"].split("/"), lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end)) for f in files
     ]
     data, v1, _v2 = hybrid.build_from(repo.split("/")[1], sources, trackers, hybrid.piece_length(total))
+    lease.renew(force=True)
     for f in files:
         digest, size = sums.get(f["path"], (None, None))
         if size != f["size"]:
