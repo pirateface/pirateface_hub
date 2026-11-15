@@ -32,14 +32,19 @@ def request(method, path, key, body=None, timeout=120):
             return e.code, {"error": e.reason}
 
 
-def lease(key):
-    """Take one job. 200 with the job, 204 when nothing is queued."""
-    return request("POST", "/api/work/lease", key, {})
+def lease(key, name=None):
+    """Take one job. 200 with the job, 204 when nothing is queued. name is an optional lane label."""
+    body = {}
+    if name:
+        body["name"] = name
+    return request("POST", "/api/work/lease", key, body)
 
 
-def renew(key, lease_id, bytes_done=None, bytes_total=None):
+def renew(key, lease_id, bytes_done=None, bytes_total=None, name=None):
     """Keep a lease. bytes_done and bytes_total are the progress the rescue board draws."""
     body = {"leaseId": lease_id}
+    if name:
+        body["name"] = name
     if bytes_done is not None:
         body["bytesDone"] = int(bytes_done)
         body["bytesTotal"] = int(0 if bytes_total is None else bytes_total)

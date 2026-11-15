@@ -14,14 +14,14 @@ REPORT_BYTES = 1 << 30
 class Lease:
     """Renews the lease while files stream, and reports bytes so the rescue board can draw the lane."""
 
-    def __init__(self, key, lease_id, total):
-        self.key, self.id, self.total, self.done = key, lease_id, total, 0
+    def __init__(self, key, lease_id, total, name=None):
+        self.key, self.id, self.total, self.done, self.name = key, lease_id, total, 0, name
         self.renewed = 0.0
 
     def renew(self, force=False):
         if not force and time.monotonic() - self.renewed < RENEW_SECONDS:
             return
-        status, body = site.renew(self.key, self.id, self.done, self.total)
+        status, body = site.renew(self.key, self.id, self.done, self.total, self.name)
         if status != 200:
             raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
         self.renewed = time.monotonic()
@@ -31,12 +31,12 @@ class Lease:
         self.renew()
 
 
-def build(job, key, trackers):
+def build(job, key, trackers, name=None):
     """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash)."""
     repo, revision = job["repoId"], job["revision"]
     files = sorted(job["files"], key=lambda f: [s.encode() for s in f["path"].split("/")])
     total = sum(f["size"] for f in files)
-    lease = Lease(key, job["leaseId"], total)
+    lease = Lease(key, job["leaseId"], total, name)
     lease.renew(force=True)
     sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
 

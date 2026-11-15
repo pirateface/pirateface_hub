@@ -21,9 +21,9 @@ def _consent():
         raise user.SeedError("not started")
 
 
-def _work_once(key, trackers):
+def _work_once(key, trackers, name):
     """One job. Returns None if nothing was queued, else True if listed, False if the site refused it."""
-    status, job = site.lease(key)
+    status, job = site.lease(key, name)
     if status == 204:
         return None
     if status != 200:
@@ -32,7 +32,7 @@ def _work_once(key, trackers):
     print(f"==> Leased {job['repoId']} at {job['revision'][:12]}: {len(job['files'])} files, {total / 1e9:.2f} GB")
     # A failed build raises: the lease stays with this account until it lapses (10 minutes), so a retry
     # now would be refused. The request then goes back to the queue.
-    data, manifest, infohash = build.build(job, key, trackers)
+    data, manifest, infohash = build.build(job, key, trackers, name)
     if len(data) > MAX_TORRENT_BYTES:
         raise user.SeedError("the .torrent is over the 3 MB upload limit")
     status, answer = site.complete(key, job["leaseId"], data, manifest)
@@ -57,7 +57,7 @@ def run(args):
     trackers = api.trackers(key)
     while True:
         try:
-            listed = _work_once(key, trackers)
+            listed = _work_once(key, trackers, args.name)
         except (user.SeedError, WorkError) as e:
             sys.exit(
                 f"error: {e}. The lease lapses after 10 minutes without renewal; the request then returns to the queue."

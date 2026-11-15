@@ -1,6 +1,15 @@
 import argparse
+import re
 
 import pirateface._boot  # noqa: F401  # uv tools skip .pth files
+
+_WORK_NAME = re.compile(r"[A-Za-z0-9._-]{1,24}")
+
+
+def _work_name(value):
+    if not _WORK_NAME.fullmatch(value):
+        raise argparse.ArgumentTypeError("use 1 to 24 letters, digits, dots, underscores or hyphens")
+    return value
 
 
 def main():
@@ -51,6 +60,11 @@ def main():
         "builds the hybrid torrent and submits it. Nothing is written to disk. Loops until stopped (Ctrl-C).",
     )
     w.add_argument("--once", action="store_true", help="take one job and exit")
+    w.add_argument(
+        "--name",
+        type=_work_name,
+        help="optional label shown next to your account name on the rescue board (1 to 24 letters, digits, . _ -)",
+    )
     w.add_argument("--idle", type=int, default=300, help="seconds between checks when nothing is queued (default 300)")
     w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(
