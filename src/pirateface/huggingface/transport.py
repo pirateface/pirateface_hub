@@ -51,11 +51,13 @@ def _wrap(http):
                 (RESOLVE, responses.resolve),
             ):
                 m = pattern.fullmatch(path)
-                if (
-                    m
-                    and (namespace is None or m[1].split("/")[0].lower() == namespace)
-                    and (found := api.pf_only(m[1]))
-                ):
+                if not m or (namespace is not None and m[1].split("/")[0].lower() != namespace):
+                    continue
+                try:
+                    found = api.pf_only(m[1])
+                except api.Unreachable:
+                    continue
+                if found:
                     status, headers, body = answer(found, request.method, *m.groups()[1:])
                     if body is None:
                         return httpx2.Response(status, headers=headers, request=request)

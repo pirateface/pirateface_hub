@@ -128,7 +128,11 @@ def _handle(repo_id, resume=None):
     with _lock:
         if repo_id in _handles:
             return _handles[repo_id]
-        magnet = api.lookup_magnet(repo_id)
+        try:
+            magnet = api.lookup_magnet(repo_id)
+        except api.Unreachable as e:
+            # Don't cache this as "not on Pirate Face": the site may be back next time.
+            raise Unavailable("Pirate Face unreachable") from e
         if magnet is api.NOT_LISTED:
             ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
             _handles[repo_id] = None
@@ -171,7 +175,10 @@ def _handle(repo_id, resume=None):
 
 
 def _save_torrent_file(repo_id, saved, infohash):
-    data = api.torrent_file(repo_id)
+    try:
+        data = api.torrent_file(repo_id)
+    except api.Unreachable:
+        return  # the magnet still works; file list can come from peers
     if data and str(lt.torrent_info(data).info_hashes().v1) == infohash:
         saved.parent.mkdir(parents=True, exist_ok=True)
         saved.write_bytes(data)

@@ -37,7 +37,10 @@ def weights(src, paths):
 def matching_quant(repo, src):
     """The listed quant whose weight files src has most of, or None for the default torrent.
     A revision can have one torrent per quant (say UD-Q8_K_XL and UD-IQ4_XS)."""
-    entry = api.lookup(repo)
+    try:
+        entry = api.lookup(repo)
+    except api.Unreachable:
+        return None  # the .torrent fetch will report the outage
     quants = (entry.get("quants") or []) if isinstance(entry, dict) else []
     best = max(quants, key=lambda q: len(weights(src, [f["path"] for f in q["files"]])), default=None)
     return best["quant"] if len(quants) > 1 and weights(src, [f["path"] for f in best["files"]]) else None
@@ -45,7 +48,10 @@ def matching_quant(repo, src):
 
 def seed_listed(repo, src, key, per_file=False):
     """Seed the torrent Pirate Face already lists, with whatever files src has."""
-    data = api.torrent_file(repo, matching_quant(repo, src))
+    try:
+        data = api.torrent_file(repo, matching_quant(repo, src))
+    except api.Unreachable as e:
+        raise SeedError(f"could not reach {API}") from e
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
     paths = [p for p, _, _ in torrent.files_in(data)]
@@ -79,7 +85,7 @@ def seed(repo, folder=None, revision=None, per_file=False):
     if folder and not Path(folder).is_dir():
         raise SeedError(f"{folder} is not a folder")
     key = user.load_key()
-    entry = api.lookup(repo)
+    entry = api.lookup_soft(repo)
     if entry is None:
         raise SeedError(f"could not reach {API}")
     if entry is api.NOT_LISTED:
