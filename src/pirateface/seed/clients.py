@@ -103,16 +103,21 @@ class QBittorrent:
         with self.op.open(req, timeout=30) as r:
             return r.read().decode()
 
-    def has(self, infohash):
+    def find(self, infohash):
+        """The client's entry for the torrent, or None."""
         # qBittorrent ids a hybrid or v2 torrent by its v2 hash cut to 40 digits; full hashes are in infohash_v1/_v2.
         ids = ("hash", "infohash_v1", "infohash_v2")
-        return any(infohash in (t.get(k) for k in ids) for t in json.loads(self.call("torrents/info")))
+        return next((t for t in json.loads(self.call("torrents/info")) if infohash in (t.get(k) for k in ids)), None)
 
-    def add(self, data, save_dir):
+    def has(self, infohash):
+        return self.find(infohash) is not None
+
+    def add(self, data, save_dir, skip_checking=False):
         b = uuid.uuid4().hex
+        skip = f'--{b}\r\nContent-Disposition: form-data; name="skip_checking"\r\n\r\ntrue\r\n' if skip_checking else ""
         body = (
             (
-                f'--{b}\r\nContent-Disposition: form-data; name="savepath"\r\n\r\n{save_dir}\r\n'
+                f'--{b}\r\nContent-Disposition: form-data; name="savepath"\r\n\r\n{save_dir}\r\n{skip}'
                 f'--{b}\r\nContent-Disposition: form-data; name="torrents"; filename="model.torrent"\r\n'
                 "Content-Type: application/x-bittorrent\r\n\r\n"
             ).encode()

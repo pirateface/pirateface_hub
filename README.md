@@ -54,15 +54,16 @@ links to them go in `~/pirateface-seeds/<model>`.
 ```sh
 pf seed --hf-cache         # every complete model in the Hugging Face cache, asking per model
 pf seed --update-trackers  # add your account's seeding tracker to torrents you already seed
-pf seed --per-file org/model  # also seed shared files on their own (works with --hf-cache too)
+pf seed --no-per-file org/model  # only the model's torrent (see below)
 ```
 
 When two uploads have the same file, Pirate Face gives that file its own swarm, shared by both.
-`--per-file` adds that file's torrent for each of the model's files of 1 MiB or more that another listed
-upload also has. It points at your copy, so the client checks it and seeds without downloading anything.
-The model's own torrent keeps seeding. This needs qBittorrent (the per-file torrents are BitTorrent v2
-only) and a v2 or hybrid model torrent; older v1-only uploads are skipped. Links go in
-`~/pirateface-seeds/<model>/per-file`.
+`pf seed` also adds that file's torrent for each of the model's files of 1 MiB or more that another listed
+upload also has, pointed at your copy: nothing is downloaded. The file isn't read again either when it was
+already verified (just hashed for a submission, or the model's torrent finished checking in your client);
+otherwise the client checks it first. The model's own torrent keeps seeding. This needs qBittorrent (the
+per-file torrents are BitTorrent v2 only) and a v2 or hybrid model torrent; older v1-only uploads are
+skipped. Links go in `~/pirateface-seeds/<model>/per-file`. `--no-per-file` turns it off.
 
 To submit one folder with `package.sh`'s flags:
 

@@ -38,8 +38,9 @@ def main():
     )
     s.add_argument(
         "--per-file",
-        action="store_true",
-        help="also seed each file another upload shares (1 MiB or more) in its own swarm (qBittorrent)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="also seed each file another upload shares (1 MiB or more) in its own swarm (qBittorrent; default on)",
     )
     s.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
     u = sub.add_parser(

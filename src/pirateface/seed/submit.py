@@ -279,7 +279,7 @@ def submit_new(
     start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
     confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path)
     if per_file:
-        file_swarms.seed(data, save_dir, out, v1)
+        file_swarms.seed(data, save_dir, out, v1, verified=True)  # build_torrent just hashed every file
 
 
 def print_dry_run(body, data, v1, v2, torrent_path, skipped):

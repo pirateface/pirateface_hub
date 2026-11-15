@@ -1,8 +1,12 @@
-"""pf seed --per-file: also seed the model's shared files, each in its own swarm.
+"""pf seed's per-file swarms (on unless --no-per-file): also seed the model's shared files, each in its own swarm.
 
 Pirate Face publishes a pure v2 torrent per file (by BEP 52 pieces root, /api/files/<root>). Every upload
-with the same bytes shares it. Added over the local copy, the client only checks the file: nothing is
-downloaded. The model torrent keeps seeding."""
+with the same bytes shares it. The model torrent keeps seeding.
+
+No extra hashing: the model torrent already holds each file's pieces root, the same Merkle root the
+per-file torrent has. Once the file is verified against it (we just hashed it, or the client finished
+checking the model torrent), the per-file torrent is added without a check, so the file isn't read again.
+Peers still check every 16 KiB block they get against that root. Otherwise the client checks the file."""
 
 from pathlib import Path
 
@@ -28,8 +32,9 @@ def local_files(data, save_dir):
     return found
 
 
-def seed(data, save_dir, out, v1):
-    """Add the per-file torrent of each file that another listed upload also has, linked to the local copy."""
+def seed(data, save_dir, out, v1, verified=False):
+    """Add the per-file torrent of each file that another listed upload also has, linked to the local copy.
+    verified: the files were just hashed into this torrent."""
     print("\n==> Per-file swarms")
     found = local_files(data, save_dir)
     if found is None:
@@ -39,11 +44,16 @@ def seed(data, save_dir, out, v1):
     if not qbt:
         print("    Skipped: per-file torrents are BitTorrent v2 only and need qBittorrent (Web UI on).")
         return
-    added = had = 0
+    model = qbt.find(v1)
+    verified = verified or bool(model and model.get("progress") == 1)
+    listed = added = had = 0
     for path, root in found:
         entry = api.file_root(root)
-        if not entry or all(s["infohash"] == v1 for s in entry["siblings"]):
-            continue  # not listed yet, or only in this upload
+        if not entry:
+            continue
+        listed += 1
+        if all(s["infohash"] == v1 for s in entry["siblings"]):
+            continue  # only in this upload
         if qbt.has(entry["infohashV2"]):
             had += 1
             continue
@@ -54,9 +64,12 @@ def seed(data, save_dir, out, v1):
         folder = out / "per-file" / root[:16]
         (folder / name).unlink(missing_ok=True)
         package.link(path.resolve(), folder / name)
-        qbt.add(torrent, folder)
+        qbt.add(torrent, folder, skip_checking=verified)
         added += 1
-    if not added + had:
+    if not listed:
+        print("    Per-file swarms are not available yet.")
+    elif not added + had:
         print("    None of its files (1 MiB or more) are in another listed upload.")
-        return
-    print(f"    Added {added} to qBittorrent ({had} already there). Each is checked against your copy, then seeds.")
+    else:
+        how = "Already verified: they seed now." if verified else "Each is checked against your copy, then seeds."
+        print(f"    Added {added} to qBittorrent ({had} already there). {how}")
