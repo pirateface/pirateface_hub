@@ -2,9 +2,11 @@
 
 import getpass
 import os
+import re
 import sys
 from pathlib import Path
 
+from pirateface.client import api
 from pirateface.config import API
 from pirateface.seed import clients
 
@@ -40,7 +42,7 @@ def ask(prompt, hidden=False):
 
 def load_key():
     """Account key from /account, saved for next time."""
-    key = os.environ.get("PIRATEFACE_KEY") or (KEY_FILE.read_text().strip() if KEY_FILE.exists() else "")
+    key = read_key()
     if key:
         return key
     if YES:
@@ -54,3 +56,25 @@ def load_key():
     KEY_FILE.write_text(key + "\n")
     print(f"    Saved to {KEY_FILE}")
     return key
+
+
+def read_key():
+    """The saved account key, or None. Never prompts."""
+    return os.environ.get("PIRATEFACE_KEY") or (KEY_FILE.read_text().strip() if KEY_FILE.exists() else "") or None
+
+
+SEEDING_TRACKER = re.compile(r"^https?://[^ ]+:6970/[^ ]+/announce$")
+
+
+def seeding_tracker():
+    """This account's keyed seeding tracker (the :6970 URL /api/trackers returns last), or None when
+    there is no saved key or the site did not answer. Trackers are outside the info dict, so adding one
+    never changes an infohash or re-downloads anything."""
+    key = read_key()
+    if not key:
+        return None
+    try:
+        mine = api.trackers(key)[-1]
+    except Exception:
+        return None
+    return mine if SEEDING_TRACKER.fullmatch(mine) else None

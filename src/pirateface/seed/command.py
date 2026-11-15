@@ -93,8 +93,8 @@ def seed(repo, folder=None, revision=None, per_file=False):
 def update_trackers():
     """Add this account's seeding tracker to every Pirate Face torrent already in the client. Trackers are
     outside the info dict: the infohash stays the same and nothing is downloaded again."""
-    mine = api.trackers(user.load_key())[-1]
-    if not re.fullmatch(r"https?://[^ ]+:6970/[^ ]+/announce", mine):
+    mine = user.seeding_tracker()
+    if not mine:
         raise SeedError(f"could not get your seeding tracker from {API}/api/trackers (key rejected or site down)")
     print("==> Adding your seeding tracker to Pirate Face torrents")
     try:
