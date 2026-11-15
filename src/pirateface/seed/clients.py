@@ -103,9 +103,10 @@ class QBittorrent:
         with self.op.open(req, timeout=30) as r:
             return r.read().decode()
 
-    def has(self, v1):
-        # qBittorrent names a hybrid torrent by its v2 hash; the v1 one is in infohash_v1.
-        return any(v1 in (t.get("hash"), t.get("infohash_v1")) for t in json.loads(self.call("torrents/info")))
+    def has(self, infohash):
+        # qBittorrent ids a hybrid or v2 torrent by its v2 hash cut to 40 digits; full hashes are in infohash_v1/_v2.
+        ids = ("hash", "infohash_v1", "infohash_v2")
+        return any(infohash in (t.get(k) for k in ids) for t in json.loads(self.call("torrents/info")))
 
     def add(self, data, save_dir):
         b = uuid.uuid4().hex

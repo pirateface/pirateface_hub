@@ -66,6 +66,25 @@ def pf_only(repo_id):
     return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
 
 
+def file_root(root):
+    """One file's own swarm, by BEP 52 pieces root (GET /api/files/<root>): name, infohashV2, siblings
+    (the listed uploads holding it) and the path of its .torrent. None if not listed or unreachable."""
+    try:
+        with urllib.request.urlopen(f"{API}/api/files/{root}", timeout=15) as r:
+            return json.load(r)
+    except Exception:
+        return None
+
+
+def download(path):
+    """Bytes of a file on the site (path as the API gives it), or None."""
+    try:
+        with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
+            return r.read()
+    except Exception:
+        return None
+
+
 # Fallback when the site doesn't answer; normally replaced by /api/trackers.
 TRACKERS = ["udp://tracker.pirateface.co:6969/announce", "http://tracker.pirateface.co:6969/announce"]
 

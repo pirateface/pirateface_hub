@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pirateface.client import api, torrent
 from pirateface.config import API
-from pirateface.seed import clients, package, submit, user
+from pirateface.seed import clients, file_swarms, package, submit, user
 from pirateface.seed.user import SeedError
 
 WEIGHT = re.compile(r"\.(safetensors|gguf|onnx|bin|pt|pth|ckpt|mlx|npz)$", re.IGNORECASE)  # as the site keys a quant
@@ -42,7 +42,7 @@ def matching_quant(repo, src):
     return best["quant"] if len(quants) > 1 and weights(src, [f["path"] for f in best["files"]]) else None
 
 
-def seed_listed(repo, src, key):
+def seed_listed(repo, src, key, per_file=False):
     """Seed the torrent Pirate Face already lists, with whatever files src has."""
     data = api.torrent_file(repo, matching_quant(repo, src))
     if not data:
@@ -66,9 +66,11 @@ def seed_listed(repo, src, key):
     rest = "" if have == len(paths) else "; the client downloads the rest"
     print(f"==> {repo} is on Pirate Face. You have {have} of its {len(paths)} files{rest}.")
     submit.start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=False)
+    if per_file:
+        file_swarms.seed(data, save_dir, out, v1)
 
 
-def seed(repo, folder=None, revision=None):
+def seed(repo, folder=None, revision=None, per_file=False):
     if not submit.REPO.fullmatch(repo):
         raise SeedError("the repo must look like author/model")
     if revision and not submit.COMMIT.fullmatch(revision):
@@ -81,10 +83,10 @@ def seed(repo, folder=None, revision=None):
         raise SeedError(f"could not reach {API}")
     if entry is api.NOT_LISTED:
         src = Path(folder) if folder else local_copy(repo, revision, download=True)
-        submit.submit_new(repo, src, revision or (None if folder else src.name), key)
+        submit.submit_new(repo, src, revision or (None if folder else src.name), key, per_file=per_file)
     else:
         src = Path(folder) if folder else local_copy(repo, entry.get("revision"), download=False)
-        seed_listed(repo, src, key)
+        seed_listed(repo, src, key, per_file)
 
 
 def update_trackers():
@@ -111,9 +113,9 @@ def run(args):
         elif args.hf_cache:
             from pirateface.seed import cache  # imports this module for seed_listed
 
-            cache.seed_cache()
+            cache.seed_cache(args.per_file)
         elif args.repo_id:
-            seed(args.repo_id, args.folder, args.revision)
+            seed(args.repo_id, args.folder, args.revision, args.per_file)
         else:
             raise SeedError("give a repo (author/model), --hf-cache or --update-trackers")
     except user.RateLimited as e:

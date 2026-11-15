@@ -11,7 +11,7 @@ from pathlib import Path
 from pirateface import ui
 from pirateface.client import api
 from pirateface.config import API
-from pirateface.seed import clients, hub, package, user
+from pirateface.seed import clients, file_swarms, hub, package, user
 from pirateface.seed.user import SeedError
 
 TERMS_VERSION = "2026-09-18.2"
@@ -239,6 +239,7 @@ def submit_new(
     web_seed=None,
     dry_run=False,
     command="pf seed",
+    per_file=False,
 ):
     """Package src, check it against Hugging Face (unless direct), start seeding, then submit.
     A dry run stops before the torrent client and the POST, and prints what it would send."""
@@ -277,6 +278,8 @@ def submit_new(
     # Seed first: a listed magnet is only useful if someone is sharing the files.
     start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
     confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path)
+    if per_file:
+        file_swarms.seed(data, save_dir, out, v1)
 
 
 def print_dry_run(body, data, v1, v2, torrent_path, skipped):
