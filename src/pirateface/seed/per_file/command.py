@@ -4,7 +4,7 @@
 from pirateface.seed import clients
 from pirateface.seed.per_file.adder import Adder
 from pirateface.seed.per_file.files import local_files
-from pirateface.seed.user import SeedError
+from pirateface.seed.user import SeedError, seeding_tracker
 
 NEEDS_QBITTORRENT = "per-file torrents are BitTorrent v2 only and need qBittorrent (Web UI on)"
 NOT_YET = "    Per-file swarms are not available yet."
@@ -27,7 +27,7 @@ def seed_model(data, save_dir, v1, verified=False):
         return
     model = qbt.find(v1)
     verified = verified or bool(model and model.get("progress") == 1)
-    adder = Adder(qbt)
+    adder = Adder(qbt, mine=seeding_tracker())
     adder.add_files(found, v1, verified)
     if not adder.listed:
         print(NOT_YET)
@@ -44,7 +44,7 @@ def update_all():
     qbt = qbittorrent()
     if not qbt:
         raise SeedError(NEEDS_QBITTORRENT)
-    adder = Adder(qbt)
+    adder = Adder(qbt, mine=seeding_tracker())
     scanned = v1_only = 0
     for t in qbt.torrents():
         # Model torrents are v1 or hybrid; pure v2 ones (no v1 hash) are per-file torrents themselves.

@@ -67,6 +67,10 @@ per-file torrents are BitTorrent v2 only) and a v2 or hybrid model torrent; olde
 skipped. Links go in `~/pirateface-seeds/per-file`. `--no-per-file` turns it off. Per-file torrents are
 force-started, so they seed even when qBittorrent's queue is full; your model torrents keep your queue settings.
 
+Seeding a file's own swarm also counts on your account: each per-file torrent announces to the same
+seeding tracker as your model torrents, so Pirate Face sees it (and weights it by the file's size, not the
+whole model's). `pf seed --update-trackers` adds that tracker to per-file torrents you added before this.
+
 Already seeding models in qBittorrent from before this? `pf seed --update-per-file` goes through the
 Pirate Face torrents qBittorrent has and does the same for each, from the files it already has: nothing is
 downloaded or submitted again. Running it again adds nothing twice.

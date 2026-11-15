@@ -143,15 +143,24 @@ class QBittorrent:
         Its id here is the v2 infohash cut to 40 digits; the full one is ignored."""
         self.call("torrents/setForceStart", {"hashes": v2[:40], "value": "true"})
 
-    def update_trackers(self, mine):
-        # Announce to every tracker in every tier. qBittorrent's default stops at the first
-        # tracker that answers, so the seeding tracker would never hear from it.
+    def ensure_announce_all(self):
+        """Announce to every tracker in every tier. qBittorrent's default stops at the first tracker that
+        answers, so a keyed tracker added after the site ones would never hear from it. True if it changed."""
         prefs = json.loads(self.call("app/preferences"))
-        extra = ""
         if not (prefs.get("announce_to_all_trackers") and prefs.get("announce_to_all_tiers")):
-            prefs = {"announce_to_all_trackers": True, "announce_to_all_tiers": True}
-            self.call("app/setPreferences", {"json": json.dumps(prefs)})
-            extra = " Turned on Options > Advanced > Always announce to all trackers in a tier / to all tiers."
+            self.call(
+                "app/setPreferences",
+                {"json": json.dumps({"announce_to_all_trackers": True, "announce_to_all_tiers": True})},
+            )
+            return True
+        return False
+
+    def update_trackers(self, mine):
+        extra = (
+            " Turned on Options > Advanced > Always announce to all trackers in a tier / to all tiers."
+            if self.ensure_announce_all()
+            else ""
+        )
         added = current = skipped = 0
         changed = []
         for t in self.torrents():
