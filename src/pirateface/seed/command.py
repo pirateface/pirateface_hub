@@ -37,10 +37,7 @@ def weights(src, paths):
 def matching_quant(repo, src):
     """The listed quant whose weight files src has most of, or None for the default torrent.
     A revision can have one torrent per quant (say UD-Q8_K_XL and UD-IQ4_XS)."""
-    try:
-        entry = api.lookup(repo)
-    except api.Unreachable:
-        return None  # the .torrent fetch will report the outage
+    entry = api.lookup_soft(repo)  # an outage becomes None; the .torrent fetch reports it
     quants = (entry.get("quants") or []) if isinstance(entry, dict) else []
     best = max(quants, key=lambda q: len(weights(src, [f["path"] for f in q["files"]])), default=None)
     return best["quant"] if len(quants) > 1 and weights(src, [f["path"] for f in best["files"]]) else None

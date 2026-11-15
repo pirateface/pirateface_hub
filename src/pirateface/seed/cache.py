@@ -71,7 +71,7 @@ def plan_cache():
         if need and not (snap / need).exists():
             yield row("skip", f"{lic} copies must include {need}; download it too", size)
             continue
-        entry = api.lookup(repo)
+        entry = api.lookup_soft(repo)
         if entry is None:
             yield row("skip", "could not reach Pirate Face", size)
         elif entry is api.NOT_LISTED:
