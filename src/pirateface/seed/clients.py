@@ -138,6 +138,11 @@ class QBittorrent:
         if self.call("torrents/add", body=body, content_type=f"multipart/form-data; boundary={b}").strip() == "Fails.":
             raise RuntimeError("qBittorrent did not take the torrent")
 
+    def force_start(self, v2):
+        """Seed a v2 torrent even when the queue is full (qBittorrent queues past 3 active uploads by default).
+        Its id here is the v2 infohash cut to 40 digits; the full one is ignored."""
+        self.call("torrents/setForceStart", {"hashes": v2[:40], "value": "true"})
+
     def update_trackers(self, mine):
         # Announce to every tracker in every tier. qBittorrent's default stops at the first
         # tracker that answers, so the seeding tracker would never hear from it.

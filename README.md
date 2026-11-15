@@ -64,7 +64,8 @@ upload also has, pointed at your copy: nothing is downloaded. The file isn't rea
 already verified (just hashed for a submission, or the model's torrent finished checking in your client);
 otherwise the client checks it first. The model's own torrent keeps seeding. This needs qBittorrent (the
 per-file torrents are BitTorrent v2 only) and a v2 or hybrid model torrent; older v1-only uploads are
-skipped. Links go in `~/pirateface-seeds/per-file`. `--no-per-file` turns it off.
+skipped. Links go in `~/pirateface-seeds/per-file`. `--no-per-file` turns it off. Per-file torrents are
+force-started, so they seed even when qBittorrent's queue is full; your model torrents keep your queue settings.
 
 Already seeding models in qBittorrent from before this? `pf seed --update-per-file` goes through the
 Pirate Face torrents qBittorrent has and does the same for each, from the files it already has: nothing is

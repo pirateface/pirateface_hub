@@ -45,4 +45,5 @@ class Adder:
         (folder / name).unlink(missing_ok=True)
         package.link(path.resolve(), folder / name)
         self.qbt.add(torrent, folder, skip_checking=verified)
+        self.qbt.force_start(entry["infohashV2"])
         return True
