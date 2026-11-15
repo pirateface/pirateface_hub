@@ -5,6 +5,7 @@ import contextlib
 import functools
 import json
 import re
+import ssl
 import threading
 import time
 import urllib.error
@@ -90,6 +91,15 @@ def torrent_file(repo_id, quant=None):
     try:
         with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
             return r.read()
+    except urllib.error.HTTPError:
+        # 403/404/410/429 are answers about this torrent, not an outage: keep the "no .torrent"
+        # answer (pf_only() relies on it) instead of latching every repo down for 30s.
+        return None
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, ssl.SSLError):
+            return None  # this request's handshake failed; lookups to the site can still work
+        _mark_down()
+        raise Unreachable(f"could not reach {API}") from e
     except Exception as e:
         # Don't cache "no .torrent" for the process: a blip would hide a PF-only repo for good.
         _mark_down()
