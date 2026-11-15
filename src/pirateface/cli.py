@@ -44,6 +44,15 @@ def main():
     u.add_argument("--web-seed", help="direct listings: https base URL serving BASE/NAME/PATH (BEP 19)")
     u.add_argument("--dry-run", action="store_true", help="build and print everything; add nothing, submit nothing")
     u.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
+    w = sub.add_parser(
+        "work",
+        help="build torrents for queued model requests, streaming from Hugging Face (no disk space needed)",
+        description="Leases one queued model from Pirate Face, streams its files from Hugging Face through memory, "
+        "builds the hybrid torrent and submits it. Nothing is written to disk. Loops until stopped (Ctrl-C).",
+    )
+    w.add_argument("--once", action="store_true", help="take one job and exit")
+    w.add_argument("--idle", type=int, default=300, help="seconds between checks when nothing is queued (default 300)")
+    w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(
         "restore",
         help="restore missing .torrent metadata on Pirate Face",
@@ -52,6 +61,11 @@ def main():
     r.add_argument("paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)")
     r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
     args = p.parse_args()
+
+    if args.cmd == "work":
+        from pirateface import work
+
+        return work.run(args)
 
     if args.cmd == "restore":
         from pirateface import restore

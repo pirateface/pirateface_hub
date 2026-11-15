@@ -26,6 +26,7 @@ Issues = "https://github.com/pirateface/pirateface_hub/issues"
 
 [project.scripts]
 pf = "pirateface.cli:main"
+pirateface = "pirateface.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

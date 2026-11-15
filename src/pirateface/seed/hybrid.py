@@ -102,13 +102,25 @@ def build(root, trackers, plen=None):
         raise ValueError("no files to put in the torrent")
     if plen is None:
         plen = piece_length(sum(root.joinpath(*p).stat().st_size for p in paths))
+    return build_from(
+        root.absolute().name, [(p, lambda p=p: root.joinpath(*p).open("rb")) for p in paths], trackers, plen
+    )
+
+
+def build_from(name, sources, trackers, plen):
+    """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (files_under sorts them).
+
+    opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
+    except the last must return exactly BLOCK bytes: each read is hashed as one v2 leaf. Nothing is kept,
+    so a source can be a network stream. Returns (bytes, v1 hex, v2 hex).
+    """
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
     v1 = _V1Pieces(plen)
     files, tree, layers, pad_index = [], {}, {}, 0
-    for parts in paths:
+    for parts, opener in sources:
         size, leaves, piece_roots = 0, [], []
-        with root.joinpath(*parts).open("rb") as f:
+        with opener() as f:
             while block := f.read(BLOCK):
                 size += len(block)
                 v1.add(block)
@@ -130,7 +142,7 @@ def build(root, trackers, plen=None):
         node[""] = entry
         files.append({"length": size, "path": parts})
         pad = -size % plen
-        if pad and len(paths) > 1:
+        if pad and len(sources) > 1:
             pad_index += 1
             files.append({"attr": "p", "length": pad, "path": [".pad", f"{pad_index}-{pad}"]})
             v1.add(bytes(pad))
@@ -138,7 +150,7 @@ def build(root, trackers, plen=None):
         "file tree": tree,
         "files": files,
         "meta version": 2,
-        "name": root.absolute().name,
+        "name": name,
         "piece length": plen,
         "pieces": v1.finish(),
     }
