@@ -12,6 +12,16 @@ def _work_name(value):
     return value
 
 
+def _max_size(value):
+    try:
+        size = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use a whole number of GiB (0 = no limit)") from None
+    if size < 0:
+        raise argparse.ArgumentTypeError("use a whole number of GiB (0 = no limit)")
+    return size
+
+
 def main():
     p = argparse.ArgumentParser(prog="pf")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -77,6 +87,12 @@ def main():
         help="optional label shown next to your account name on the rescue board (1 to 24 letters, digits, . _ -)",
     )
     w.add_argument("--idle", type=int, default=300, help="seconds between checks when nothing is queued (default 300)")
+    w.add_argument(
+        "--max-size",
+        type=_max_size,
+        metavar="GiB",
+        help="biggest model to take, in GiB; 0 means any size (default: the server's 500 GiB cap)",
+    )
     w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(
         "restore",

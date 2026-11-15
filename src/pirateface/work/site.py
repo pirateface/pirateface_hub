@@ -32,11 +32,14 @@ def request(method, path, key, body=None, timeout=120):
             return e.code, {"error": e.reason}
 
 
-def lease(key, name=None):
-    """Take one job. 200 with the job, 204 when nothing is queued. name is an optional lane label."""
+def lease(key, name=None, max_bytes=None):
+    """Take one job. 200 with the job, 204 when nothing is queued. name is an optional lane label.
+    max_bytes caps the model size in bytes (0 = no cap); absent means the server's default cap."""
     body = {}
     if name:
         body["name"] = name
+    if max_bytes is not None:
+        body["maxBytes"] = max_bytes
     return request("POST", "/api/work/lease", key, body)
 
 
