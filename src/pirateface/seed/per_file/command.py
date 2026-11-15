@@ -17,7 +17,11 @@ def qbittorrent():
 def seed_model(data, save_dir, v1, verified=False):
     """Per-file torrents for the model pf seed just added. verified: its files were just hashed."""
     print("\n==> Per-file swarms")
-    found = local_files(data, save_dir)
+    try:
+        found = local_files(data, save_dir)
+    except (RuntimeError, ValueError) as exc:  # libtorrent rejects a malformed piece layer
+        print(f"    Skipped: this torrent's metadata could not be read ({exc}).")
+        return
     if found is None:
         print("    Skipped: this torrent is v1 only, so its files have no per-file swarms.")
         return
@@ -45,13 +49,18 @@ def update_all():
     if not qbt:
         raise SeedError(NEEDS_QBITTORRENT)
     adder = Adder(qbt, mine=seeding_tracker())
-    scanned = v1_only = 0
+    scanned = v1_only = unreadable = 0
     for t in qbt.torrents():
         # Model torrents are v1 or hybrid; pure v2 ones (no v1 hash) are per-file torrents themselves.
         if not t.get("infohash_v1") or not clients.is_pirateface(qbt.trackers(t["hash"])):
             continue
         scanned += 1
-        found = local_files(qbt.export(t["hash"]), t["save_path"])
+        try:
+            found = local_files(qbt.export(t["hash"]), t["save_path"])
+        except (OSError, RuntimeError, ValueError) as exc:  # OSError: qBittorrent 409 before metadata is fetched
+            print(f"    Skipped {t.get('name') or t['hash'][:8]}: {exc}")
+            unreadable += 1
+            continue
         if found is None:
             v1_only += 1
             continue
@@ -61,5 +70,5 @@ def update_all():
         return
     print(
         f"    {scanned} models scanned, {len(adder.added)} per-file torrents added "
-        f"({len(adder.had)} already there), {v1_only} v1-only skipped."
+        f"({len(adder.had)} already there), {v1_only} v1-only skipped, {unreadable} unreadable skipped."
     )
