@@ -37,6 +37,11 @@ def main():
         "--update-trackers", action="store_true", help="add your seeding tracker to torrents already seeding"
     )
     s.add_argument(
+        "--update-per-file",
+        action="store_true",
+        help="add per-file swarms for the models you already seed in qBittorrent (no download, no submit)",
+    )
+    s.add_argument(
         "--per-file",
         action=argparse.BooleanOptionalAction,
         default=True,

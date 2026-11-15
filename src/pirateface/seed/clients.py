@@ -94,20 +94,31 @@ class QBittorrent:
             self.call("auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")})
         self.call("app/version")
 
-    def call(self, path, form=None, body=None, content_type=None):
+    def call(self, path, form=None, body=None, content_type=None, text=True):
         if form is not None:
             body = urllib.parse.urlencode(form).encode()
         req = urllib.request.Request(self.base + "/api/v2/" + path, body)
         if content_type:
             req.add_header("Content-Type", content_type)
         with self.op.open(req, timeout=30) as r:
-            return r.read().decode()
+            data = r.read()
+        return data.decode() if text else data
+
+    def torrents(self):
+        return json.loads(self.call("torrents/info"))
+
+    def trackers(self, h):
+        return [x["url"] for x in json.loads(self.call("torrents/trackers?hash=" + h)) if "://" in x["url"]]
+
+    def export(self, h):
+        """The .torrent file of a torrent in the client (qBittorrent 4.5 or later)."""
+        return self.call("torrents/export?hash=" + h, text=False)
 
     def find(self, infohash):
         """The client's entry for the torrent, or None."""
         # qBittorrent ids a hybrid or v2 torrent by its v2 hash cut to 40 digits; full hashes are in infohash_v1/_v2.
         ids = ("hash", "infohash_v1", "infohash_v2")
-        return next((t for t in json.loads(self.call("torrents/info")) if infohash in (t.get(k) for k in ids)), None)
+        return next((t for t in self.torrents() if infohash in (t.get(k) for k in ids)), None)
 
     def has(self, infohash):
         return self.find(infohash) is not None
@@ -138,9 +149,9 @@ class QBittorrent:
             extra = " Turned on Options > Advanced > Always announce to all trackers in a tier / to all tiers."
         added = current = skipped = 0
         changed = []
-        for t in json.loads(self.call("torrents/info")):
+        for t in self.torrents():
             h = t["hash"]
-            urls = [x["url"] for x in json.loads(self.call("torrents/trackers?hash=" + h)) if "://" in x["url"]]
+            urls = self.trackers(h)
             if not is_pirateface(urls):
                 skipped += 1
                 continue

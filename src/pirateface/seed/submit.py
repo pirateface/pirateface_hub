@@ -10,12 +10,12 @@ from pathlib import Path
 
 from pirateface import ui
 from pirateface.client import api
-from pirateface.config import API
-from pirateface.seed import clients, file_swarms, hub, package, user
+from pirateface.config import API, SEEDS
+from pirateface.seed import clients, hub, package, user
+from pirateface.seed.per_file.command import seed_model
 from pirateface.seed.user import SeedError
 
 TERMS_VERSION = "2026-09-18.2"
-SEEDS = Path(os.environ.get("PIRATEFACE_SEEDS") or Path.home() / "pirateface-seeds")
 REPO = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 UPGRADE = "uvx -p 3.13 --from pirateface@latest pf ..., or pipx upgrade pirateface, or pip install -U pirateface"
@@ -245,7 +245,7 @@ def submit_new(
     A dry run stops before the torrent client and the POST, and prints what it would send."""
     check_client_version()
     name = name or repo.split("/")[1]
-    out = Path(out) if out else SEEDS / name
+    out = Path(out or Path(SEEDS, name))
     save_dir = out / "files"
     answers = Answers(dry_run)
     # The torrent carries this account's seeding tracker. Trackers are outside the info dict,
@@ -279,7 +279,7 @@ def submit_new(
     start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
     confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path)
     if per_file:
-        file_swarms.seed(data, save_dir, out, v1, verified=True)  # build_torrent just hashed every file
+        seed_model(data, save_dir, v1, verified=True)  # build_torrent just hashed every file
 
 
 def print_dry_run(body, data, v1, v2, torrent_path, skipped):

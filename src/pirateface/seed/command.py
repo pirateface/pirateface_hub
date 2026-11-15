@@ -7,8 +7,9 @@ import sys
 from pathlib import Path
 
 from pirateface.client import api, torrent
-from pirateface.config import API
-from pirateface.seed import clients, file_swarms, package, submit, user
+from pirateface.config import API, SEEDS
+from pirateface.seed import clients, package, submit, user
+from pirateface.seed.per_file.command import seed_model, update_all
 from pirateface.seed.user import SeedError
 
 WEIGHT = re.compile(r"\.(safetensors|gguf|onnx|bin|pt|pth|ckpt|mlx|npz)$", re.IGNORECASE)  # as the site keys a quant
@@ -58,7 +59,7 @@ def seed_listed(repo, src, key, per_file=False):
     trackers = api.trackers(key)
     data = package.with_trackers(data, trackers)
     name, v1, v2, single = package.info(data)
-    out = submit.SEEDS / repo.split("/")[1]
+    out = Path(SEEDS, repo.split("/")[1])
     save_dir = out / "files"
     have = package.link_existing(src, save_dir if single else save_dir / name, paths) if src else 0
     torrent_path = out / f"{name}.torrent"
@@ -67,7 +68,7 @@ def seed_listed(repo, src, key, per_file=False):
     print(f"==> {repo} is on Pirate Face. You have {have} of its {len(paths)} files{rest}.")
     submit.start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=False)
     if per_file:
-        file_swarms.seed(data, save_dir, out, v1)
+        seed_model(data, save_dir, v1)
 
 
 def seed(repo, folder=None, revision=None, per_file=False):
@@ -110,6 +111,8 @@ def run(args):
             submit.submit(args)
         elif args.update_trackers:
             update_trackers()
+        elif args.update_per_file:
+            update_all()
         elif args.hf_cache:
             from pirateface.seed import cache  # imports this module for seed_listed
 
@@ -117,7 +120,7 @@ def run(args):
         elif args.repo_id:
             seed(args.repo_id, args.folder, args.revision, args.per_file)
         else:
-            raise SeedError("give a repo (author/model), --hf-cache or --update-trackers")
+            raise SeedError("give a repo (author/model), --hf-cache, --update-trackers or --update-per-file")
     except user.RateLimited as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(75)  # same code as package.sh, so scripts that loop over models can stop
