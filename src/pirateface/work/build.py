@@ -1,7 +1,7 @@
 """Builds one job's hybrid torrent by streaming its files, and checks the result against the job."""
 
 import sys
-import time
+import threading
 
 from pirateface.seed import hybrid
 from pirateface.work import site, source
@@ -12,23 +12,41 @@ REPORT_BYTES = 1 << 30
 
 
 class Lease:
-    """Renews the lease while files stream, and reports bytes so the rescue board can draw the lane."""
+    """Renews the lease from a daemon thread every RENEW_SECONDS, so the stream's reads never block
+    on the HTTPS call, and reports bytes so the rescue board can draw the lane. A lost lease stops the
+    job: the thread records the error and the next note() raises it."""
 
     def __init__(self, key, lease_id, total, name=None):
         self.key, self.id, self.total, self.done, self.name = key, lease_id, total, 0, name
-        self.renewed = 0.0
+        self._error = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._renew_loop, daemon=True)
 
-    def renew(self, force=False):
-        if not force and time.monotonic() - self.renewed < RENEW_SECONDS:
-            return
+    def _renew_loop(self):
+        while not self._stop.wait(RENEW_SECONDS):
+            try:
+                self.renew()
+            except WorkError as e:
+                self._error = e
+                return
+
+    def renew(self):
+        """Renew the lease now: the thread on its timer, build once at each end of the job."""
         status, body = site.renew(self.key, self.id, self.done, self.total, self.name)
         if status != 200:
             raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
-        self.renewed = time.monotonic()
 
     def note(self, n):
         self.done += n
-        self.renew()
+        if self._error is not None:
+            raise self._error
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=2)
 
 
 def build(job, key, trackers, name=None):
@@ -37,7 +55,8 @@ def build(job, key, trackers, name=None):
     files = sorted(job["files"], key=lambda f: [s.encode() for s in f["path"].split("/")])
     total = sum(f["size"] for f in files)
     lease = Lease(key, job["leaseId"], total, name)
-    lease.renew(force=True)
+    lease.renew()  # confirm we hold the lease before streaming
+    lease.start()
     sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
 
     def on_read(n):
@@ -53,8 +72,11 @@ def build(job, key, trackers, name=None):
     sources = [
         (f["path"].split("/"), lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end)) for f in files
     ]
-    data, v1, _v2 = hybrid.build_from(repo.split("/")[1], sources, trackers, hybrid.piece_length(total))
-    lease.renew(force=True)
+    try:
+        data, v1, _v2 = hybrid.build_from(repo.split("/")[1], sources, trackers, hybrid.piece_length(total))
+    finally:
+        lease.stop()
+    lease.renew()  # the last renewal before the result is submitted
     for f in files:
         digest, size = sums.get(f["path"], (None, None))
         if size != f["size"]:

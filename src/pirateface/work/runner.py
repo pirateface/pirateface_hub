@@ -10,6 +10,7 @@ from pirateface.work import build, site
 from pirateface.work.errors import WorkError
 
 MAX_TORRENT_BYTES = 3_000_000
+LEASE_LAPSE = 600  # seconds the site keeps a failed job's lease before the request goes back to the queue
 
 
 def _consent():
@@ -26,6 +27,8 @@ def _work_once(key, trackers, name, max_bytes=None):
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
         return None
+    if status == 0:  # the site could not be reached: network error, not a refusal
+        raise WorkError(job["error"])
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     total = sum(f["size"] for f in job["files"])
@@ -59,7 +62,15 @@ def run(args):
     while True:
         try:
             listed = _work_once(key, trackers, args.name, max_bytes)
-        except (user.SeedError, WorkError) as e:
+        except WorkError as e:
+            if args.once:
+                sys.exit(f"error: {e}. The lease lapses after 10 minutes; the request then returns to the queue.")
+            # One failed job or one network blip should not stop a worker. Wait out the lease so the
+            # next job is fresh, then keep going.
+            print(f"error: {e}. Taking the next job in {LEASE_LAPSE // 60} minutes.", file=sys.stderr)
+            time.sleep(LEASE_LAPSE)
+            continue
+        except user.SeedError as e:
             sys.exit(
                 f"error: {e}. The lease lapses after 10 minutes without renewal; the request then returns to the queue."
             )
