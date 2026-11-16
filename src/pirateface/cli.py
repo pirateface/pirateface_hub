@@ -1,5 +1,6 @@
 import argparse
 import re
+import sys
 
 import pirateface._boot  # noqa: F401  # uv tools skip .pth files
 
@@ -23,6 +24,14 @@ def _max_size(value):
 
 
 def main():
+    try:
+        return _main()
+    except KeyboardInterrupt:
+        print("\nStopped.", file=sys.stderr)
+        sys.exit(130)  # Ctrl-C is how pf work is meant to stop: a message, not a traceback
+
+
+def _main():
     p = argparse.ArgumentParser(prog="pf")
     sub = p.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("download", help="download a model into the Hugging Face cache")
@@ -99,7 +108,9 @@ def main():
         help="restore missing .torrent metadata on Pirate Face",
         description="Uploads one or more .torrent files (or a torrent client folder) to restore missing metadata on Pirate Face.",
     )
-    r.add_argument("paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)")
+    r.add_argument(
+        "paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)"
+    )
     r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
     args = p.parse_args()
 
@@ -120,4 +131,11 @@ def main():
 
     from huggingface_hub import snapshot_download
 
-    print(snapshot_download(args.repo_id, revision=args.revision, local_dir=args.local_dir, max_workers=1))
+    from pirateface.client import api
+
+    # One file at a time from the swarm; a model Pirate Face doesn't list uses huggingface_hub's default workers.
+    on_pirateface = isinstance(api.lookup_soft(args.repo_id), dict)
+    kwargs = {"revision": args.revision, "local_dir": args.local_dir}
+    if on_pirateface:
+        kwargs["max_workers"] = 1
+    print(snapshot_download(args.repo_id, **kwargs))

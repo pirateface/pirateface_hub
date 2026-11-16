@@ -45,6 +45,8 @@ def _bar():
 
 
 def mb(n):
+    if n >= 1e9:
+        return f"{n / 1e9:.1f} GB"
     return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} kB"
 
 

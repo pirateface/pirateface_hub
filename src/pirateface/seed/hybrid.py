@@ -40,7 +40,7 @@ def _key(k):
 
 
 def piece_length(total_size):
-    """About 2000 pieces, 256 KiB to 64 MiB (64 MiB keeps the .torrent under 3 MB up to ~10 TB)."""
+    """About 2000 pieces, 256 KiB to 64 MiB (64 MiB keeps the .torrent under 3 MB up to ~3.9 TB)."""
     exp = MIN_EXP
     while exp < MAX_EXP and total_size / (1 << exp) > TARGET_PIECES:
         exp += 1

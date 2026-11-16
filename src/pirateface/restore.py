@@ -1,9 +1,12 @@
 """pf restore: upload .torrent files to restore missing metadata on Pirate Face."""
 
+import http.client
 import sys
+import urllib.error
 from pathlib import Path
 
 from pirateface.client import api
+from pirateface.config import API
 from pirateface.seed import user
 
 MAX_TORRENT_BYTES = 3_000_000
@@ -39,11 +42,18 @@ def run(args):
         sys.exit(f"error: {e}")
 
     for path in files:
-        data = path.read_bytes()
-        if len(data) > MAX_TORRENT_BYTES:
-            print(f"too large (>3 MB): {path}")
+        try:
+            if path.stat().st_size > MAX_TORRENT_BYTES:
+                print(f"too large (>3 MB): {path}")
+                continue
+            data = path.read_bytes()
+        except OSError as e:
+            print(f"could not read {path}: {e.strerror or e}")
             continue
-        status, body = api.restore(key, data)
+        try:
+            status, body = api.restore(key, data)
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+            sys.exit(f"error: could not reach {API} ({getattr(e, 'reason', e)}); nothing more was sent")
         if status == 200:
             print(f"restored: {path.name} -> {body.get('repoId', '')} ({body.get('infohash', '')})")
         elif status == 404:
