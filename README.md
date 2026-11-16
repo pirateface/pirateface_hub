@@ -170,3 +170,13 @@ uvx -p 3.13 --with pirateface --from huggingface_hub hf download org/model
 ```sh
 uv run --group dev ruff check
 ```
+
+## Contributing
+
+- One change per PR, small enough to read in one sitting.
+- Please don't add tests for now. We're still settling how we test, so check your change by hand and say how in the PR.
+- `uv run --group dev ruff check` and `ruff format --check` should pass with nothing new.
+- When you replace code, delete the old code. No disabled flags or leftover branches.
+- Fix problems where they start rather than adding special cases around them.
+- If Pirate Face can't be reached, say so and carry on. Never crash, and never write outside the model folder.
+- Add your Pirate Face username to the PR so we can credit you.
