@@ -11,7 +11,7 @@ pip install pirateface
 Or without installing:
 
 ```sh
-uv run --with pirateface python your_script.py
+uv run -p 3.13 --with pirateface python your_script.py
 ```
 
 Anything that downloads through `huggingface_hub` (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual.
