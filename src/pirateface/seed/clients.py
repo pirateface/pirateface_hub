@@ -110,12 +110,14 @@ class QBittorrent:
         self.op.addheaders = [("Referer", self.base)]
         # No login needed when "Bypass authentication for clients on localhost" is on.
         if os.environ.get("QBT_USER"):
-            answer = self.call(
-                "auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")}
-            )
-            if answer.strip() == "Fails.":  # a wrong password is a 200 "Fails.", not an HTTP error
-                raise LoginRefused("qBittorrent refused the login: check QBT_USER and QBT_PASS")
-        self.call("app/version")
+            self.call("auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")})
+        try:
+            self.call("app/version")
+        except urllib.error.HTTPError as e:
+            # Whatever auth/login answers, a 403 on any API call means we are not authorized.
+            if e.code == 403:
+                raise LoginRefused("qBittorrent refused the login: check QBT_USER and QBT_PASS") from e
+            raise
 
     def call(self, path, form=None, body=None, content_type=None, text=True):
         if form is not None:
