@@ -32,7 +32,7 @@ class Unreachable(Exception):
 
 def _read_torrent(url, timeout):
     """The .torrent at url, or None if it is over MAX_TORRENT_BYTES."""
-    with urllib.request.urlopen(url, timeout=timeout) as r:
+    with request(url, timeout) as r:
         data = r.read(MAX_TORRENT_BYTES + 1)
     return data if len(data) <= MAX_TORRENT_BYTES else None
 
@@ -40,6 +40,17 @@ def _read_torrent(url, timeout):
 def _mark_down():
     global _down_until
     _down_until = time.monotonic() + UNREACHABLE_FOR
+
+
+def request(url, timeout, *, method=None, headers=None, data=None):
+    """One way to talk to the site: every request carries `User-Agent: pirateface/<version>`."""
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"User-Agent": f"pirateface/{VERSION}", **(headers or {})},
+        method=method,
+    )
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 @functools.cache
@@ -55,7 +66,7 @@ def lookup(repo_id, quant=None):
     params = {"repo": repo_id, **({"quant": quant} if quant else {})}
     url = f"{API}/api/torrents?" + urllib.parse.urlencode(params)
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
+        with request(url, 10) as r:
             body = r.read()
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -152,7 +163,7 @@ def file_root(root):
     if time.monotonic() < _down_until:
         return None
     try:
-        with urllib.request.urlopen(f"{API}/api/files/{root}", timeout=15) as r:
+        with request(f"{API}/api/files/{root}", 15) as r:
             return json.load(r)
     except urllib.error.HTTPError:
         return None  # an answer about this file (404: not listed)
@@ -175,9 +186,8 @@ TRACKERS = ["udp://tracker.pirateface.co:6969/announce", "http://tracker.piratef
 
 def trackers(key):
     """Public trackers plus, last, this account's seeding tracker (from the site, so changes need no release)."""
-    req = urllib.request.Request(f"{API}/api/trackers", headers={"Authorization": f"Bearer {key}"})
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with request(f"{API}/api/trackers", 15, headers={"Authorization": f"Bearer {key}"}) as r:
             lines = r.read().decode().split()
     except Exception:
         return TRACKERS
@@ -187,7 +197,7 @@ def trackers(key):
 @functools.cache
 def licenses():
     """The licenses Pirate Face lists, and repos approved one by one."""
-    with urllib.request.urlopen(f"{API}/api/licenses", timeout=30) as r:
+    with request(f"{API}/api/licenses", 30) as r:
         return json.load(r)
 
 
@@ -197,7 +207,7 @@ VERSION = version("pirateface")
 def min_client_version():
     """The oldest pirateface Pirate Face takes submissions from (GET /api/cli), or None if it doesn't say."""
     try:
-        with urllib.request.urlopen(f"{API}/api/cli", timeout=15) as r:
+        with request(f"{API}/api/cli", 15) as r:
             minimum = json.load(r).get("minVersion")
     except Exception:
         return None  # an older site without /api/cli, or offline: the submission itself will say
@@ -215,18 +225,14 @@ def older(a, b):
 
 def submit(key, body, path="/api/community-torrents"):
     """POST a community torrent. Returns (HTTP status, JSON answer)."""
-    req = urllib.request.Request(
-        f"{API}{path}",
-        data=json.dumps(body).encode(),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": f"pirateface/{VERSION}",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        with request(
+            f"{API}{path}",
+            120,
+            method="POST",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            data=json.dumps(body).encode(),
+        ) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
         try:
@@ -243,7 +249,7 @@ def upgrade(key, body):
 def torrent_status(infohash):
     """Pirate Face's record of a torrent by v1 infohash ({infohash, repo, status, supersededBy}), or None."""
     try:
-        with urllib.request.urlopen(f"{API}/api/torrents/{infohash}", timeout=15) as r:
+        with request(f"{API}/api/torrents/{infohash}", 15) as r:
             return json.load(r)
     except Exception:
         return None
@@ -252,9 +258,8 @@ def torrent_status(infohash):
 def my_torrents(key):
     """This account's listed v1-only torrents as [{repo, infohash}], for pf seed --upgrade --mine.
     None if the site did not answer (key rejected or unreachable)."""
-    req = urllib.request.Request(f"{API}/api/torrents?mine=1", headers={"Authorization": f"Bearer {key}"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with request(f"{API}/api/torrents?mine=1", 30, headers={"Authorization": f"Bearer {key}"}) as r:
             return json.load(r).get("torrents")
     except Exception:
         return None
@@ -262,18 +267,14 @@ def my_torrents(key):
 
 def restore(key, data):
     """POST raw .torrent bytes to /api/torrents/restore. Returns (HTTP status, JSON answer)."""
-    req = urllib.request.Request(
-        f"{API}/api/torrents/restore",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/x-bittorrent",
-            "User-Agent": f"pirateface/{VERSION}",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with request(
+            f"{API}/api/torrents/restore",
+            60,
+            method="POST",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/x-bittorrent"},
+            data=data,
+        ) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
         try:
@@ -286,14 +287,14 @@ _rescues = []
 
 
 def _send_rescue(repo_id):
-    req = urllib.request.Request(
-        f"{API}/api/rescue",
-        data=json.dumps({"repoId": repo_id}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     with contextlib.suppress(Exception):
-        urllib.request.urlopen(req, timeout=10).close()
+        request(
+            f"{API}/api/rescue",
+            10,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=json.dumps({"repoId": repo_id}).encode(),
+        ).close()
 
 
 def request_rescue(repo_id):

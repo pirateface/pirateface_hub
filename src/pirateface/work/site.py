@@ -4,7 +4,6 @@ import base64
 import http.client
 import json
 import urllib.error
-import urllib.request
 
 from pirateface.client import api
 from pirateface.config import API
@@ -13,18 +12,14 @@ from pirateface.config import API
 def request(method, path, key, body=None, timeout=120):
     """(HTTP status, JSON answer or None). Errors come back as statuses, not exceptions: 0 when the
     site could not be reached at all."""
-    req = urllib.request.Request(
-        f"{API}{path}",
-        data=None if body is None else json.dumps(body).encode(),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": f"pirateface/{api.VERSION}",
-        },
-        method=method,
-    )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with api.request(
+            f"{API}{path}",
+            timeout,
+            method=method,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            data=None if body is None else json.dumps(body).encode(),
+        ) as r:
             data = r.read()
             return r.status, (json.loads(data) if data else None)
     except urllib.error.HTTPError as e:
