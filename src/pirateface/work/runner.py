@@ -5,12 +5,11 @@ import time
 
 from pirateface import ui
 from pirateface.client import api
-from pirateface.config import API
+from pirateface.config import API, MAX_UPLOAD_BYTES
 from pirateface.seed import user
 from pirateface.work import build, site
 from pirateface.work.errors import WorkError, WorkUnreachable
 
-MAX_TORRENT_BYTES = 3_000_000
 WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
 WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-minute pause is safe
 
@@ -46,7 +45,7 @@ def _work_once(key, trackers, name, max_bytes=None):
     # A failed build raises. The failed job's row stays leased to this account until it lapses, so the
     # next lease call gets a different job; the request then goes back to the queue.
     data, manifest, infohash = build.build(job, key, trackers, name)
-    if len(data) > MAX_TORRENT_BYTES:
+    if len(data) > MAX_UPLOAD_BYTES:
         raise user.SeedError("the .torrent is over the 3 MB upload limit")
     status, answer = site.complete(key, job["leaseId"], data, manifest)
     if status == 0:  # the site could not be reached: the torrent is built but not submitted

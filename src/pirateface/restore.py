@@ -6,10 +6,8 @@ import urllib.error
 from pathlib import Path
 
 from pirateface.client import api
-from pirateface.config import API
+from pirateface.config import API, MAX_UPLOAD_BYTES
 from pirateface.seed import user
-
-MAX_TORRENT_BYTES = 3_000_000
 
 
 def _collect(paths):
@@ -43,7 +41,7 @@ def run(args):
 
     for path in files:
         try:
-            if path.stat().st_size > MAX_TORRENT_BYTES:
+            if path.stat().st_size > MAX_UPLOAD_BYTES:
                 print(f"too large (>3 MB): {path}")
                 continue
             data = path.read_bytes()
