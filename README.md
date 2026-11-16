@@ -33,11 +33,14 @@ More `pf seed` options:
 ```sh
 pf seed --hf-cache          # every complete model in your Hugging Face cache, asking per model
 pf seed --update-trackers   # add your seeding tracker to torrents you already seed
-pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent
+pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent, then say which can't
 pf seed --no-per-file org/model  # skip per-file swarms
 pf seed --upgrade org/model # relist your v1-only torrent as hybrid (v1 + v2) so its files get per-file swarms
 pf seed --upgrade           # switch torrents Pirate Face replaced to their replacements
 ```
+
+`pf seed --update-per-file` ends by listing the models that can't get per-file swarms and why: v1 only,
+no file of 1 MiB or more, not complete, or not in qBittorrent.
 
 `pf work --max-size 100` takes only models up to 100 GiB. `pf work --once` takes one job and exits.
 

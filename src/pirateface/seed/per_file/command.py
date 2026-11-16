@@ -1,9 +1,11 @@
-"""Per-file swarms: for one model as pf seed shares it, or for every model already in qBittorrent
-(pf seed --update-per-file). Either way the model torrents keep seeding and nothing is downloaded."""
+"""Per-file swarms: for one model as pf seed shares it, or for every model already seeded (pf seed
+--update-per-file). Either way the model torrents keep seeding and nothing is downloaded."""
+
+from pathlib import Path
 
 from pirateface.seed import clients
 from pirateface.seed.per_file.adder import Adder
-from pirateface.seed.per_file.files import local_files
+from pirateface.seed.per_file.files import MIN_SIZE, biggest_file, local_files, seeded_models
 from pirateface.seed.user import SeedError, seeding_tracker
 
 NEEDS_QBITTORRENT = "per-file torrents are BitTorrent v2 only and need qBittorrent (Web UI on)"
@@ -42,33 +44,72 @@ def seed_model(data, save_dir, v1, verified=False):
         print(f"    Added {len(adder.added)} to qBittorrent ({len(adder.had)} already there). {how}")
 
 
+def repo_of(t):
+    """The repo a qBittorrent model torrent belongs to (author/model from its seed folder), else its name.
+    pf seeds every model into a <SEEDS>/<author>--<model>/files folder, so the parent folder names the repo."""
+    folder = Path(t.get("save_path") or "").parent.name
+    if folder and "--" in folder:
+        return folder.replace("--", "/", 1)
+    return t.get("name") or t["hash"][:8]
+
+
 def update_all():
-    """Per-file torrents for every Pirate Face model torrent already in qBittorrent, from the files it has."""
-    print("==> Adding per-file swarms for the Pirate Face torrents in qBittorrent")
+    """Per-file torrents for every model pf has seeded that can have them, then which ones can't and why
+    (v1 only, no file of 1 MiB or more, not complete, not in qBittorrent)."""
+    print("==> Adding per-file swarms for the Pirate Face torrents you seed")
     qbt = qbittorrent()
     if not qbt:
         raise SeedError(NEEDS_QBITTORRENT)
     adder = Adder(qbt, mine=seeding_tracker())
-    scanned = v1_only = unreadable = 0
+    ready, v1_only, no_big, incomplete, not_in_qbt, not_listed, unreadable = [], [], [], [], [], [], []
+    seen = set()  # every model torrent qBittorrent holds, so the seed-folder scan below reports only the rest
     for t in qbt.torrents():
         # Model torrents are v1 or hybrid; pure v2 ones (no v1 hash) are per-file torrents themselves.
         if not t.get("infohash_v1") or not clients.is_pirateface(qbt.trackers(t["hash"])):
             continue
-        scanned += 1
+        label = repo_of(t)
+        seen.update(x for x in (t.get("infohash_v1"), t.get("infohash_v2")) if x)
         try:
-            found = local_files(qbt.export(t["hash"]), t["save_path"])
+            data = qbt.export(t["hash"])
+            if biggest_file(data) < MIN_SIZE:
+                no_big.append(label)
+                continue
+            found = local_files(data, t["save_path"])
         except (OSError, RuntimeError, ValueError) as exc:  # OSError: qBittorrent 409 before metadata is fetched
             print(f"    Skipped {t.get('name') or t['hash'][:8]}: {exc}")
-            unreadable += 1
+            unreadable.append(label)
             continue
         if found is None:
-            v1_only += 1
-            continue
-        adder.add_files(found, t["infohash_v1"], verified=t.get("progress") == 1)
+            v1_only.append(label)
+        elif t.get("progress") != 1 or not found:
+            incomplete.append(label)  # its files aren't all there yet, so its per-file torrents can't seed
+        else:
+            outcome = adder.add_files(found, t["infohash_v1"], verified=True)
+            (ready if outcome == "ready" else not_listed).append(label)
+    for label, v1, v2 in seeded_models():
+        if v1 in seen or (v2 and v2 in seen):
+            continue  # in qBittorrent: already counted above
+        (v1_only if v2 is None else not_in_qbt).append(label)
     if adder.asked and not adder.listed:
         print(NOT_YET)
-        return
-    print(
-        f"    {scanned} models scanned, {len(adder.added)} per-file torrents added "
-        f"({len(adder.had)} already there), {v1_only} v1-only skipped, {unreadable} unreadable skipped."
-    )
+        not_listed_why = "couldn't be checked: Pirate Face didn't answer"
+    else:
+        not_listed_why = "no per-file swarm to join: its files aren't shared with another listed upload"
+    print(f"    Per-file ready: {len(ready)} models.")
+    print(f"    Added {len(adder.added)} per-file torrents ({len(adder.had)} already there).")
+    blocks = [
+        (v1_only, "v1 only (no v2 infohash): these can never have per-file swarms"),
+        (not_in_qbt, "not in qBittorrent: per-file torrents are v2 only, so they must seed there"),
+        (no_big, "no file of 1 MiB or more: nothing worth a per-file swarm"),
+        (incomplete, "not complete in qBittorrent: their files aren't all there yet"),
+        (not_listed, not_listed_why),
+        (unreadable, "their metadata couldn't be read"),
+    ]
+    skipped = sum(len(labels) for labels, _ in blocks)
+    print(f"    Can't go per-file: {skipped} models:")
+    for labels, why in blocks:
+        if not labels:
+            continue
+        print(f"      {len(labels)} {why}:")
+        for label in labels:
+            print(f"        {label}")
