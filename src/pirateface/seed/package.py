@@ -58,24 +58,24 @@ def link(target, dest):
             ) from e
 
 
-def unsafe_path(rel):
+def unsafe_path(rel, windows=True):
     """Why rel ("/"-separated) can't be written under a folder as-is, or None: a part that is empty, "." or ".."
-    or holds a backslash would leave the folder (absolute, drive and UNC forms included), and a name
-    Windows can't store fails there."""
+    or holds a backslash would leave the folder (absolute and UNC forms included). With windows, names Windows
+    can't store are refused too: there a drive letter, a stream or a device name is another way out."""
     for part in rel.split("/"):
         if part in ("", ".", "..") or "\\" in part:
             return f"{rel}: leaves its folder"
-        if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
+        if windows and (WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part)):
             return f"{rel}: not a valid file name on Windows"
     return None
 
 
 def check_listing(data, paths):
-    """Raise LinkError if a listed torrent (paths: torrent.files_in) has a path unsafe_path refuses or a symlink
-    entry. Seeding links these paths into the seed folder and the torrent client writes them, so this runs
-    before either."""
+    """Raise LinkError if a listed torrent (paths: torrent.files_in) has a path unsafe_path refuses on this OS or
+    a symlink entry. Seeding links these paths into the seed folder and the torrent client writes them, so this
+    runs before either. Windows-only names stay seedable elsewhere: the listing is already published."""
     files = lt.bdecode(data)[b"info"].get(b"files") or []
-    problems = [why for p in paths if (why := unsafe_path(p))]
+    problems = [why for p in paths if (why := unsafe_path(p, windows=os.name == "nt"))]
     problems += [
         "/".join(p.decode(errors="replace") for p in f[b"path"]) + ": a symlink"
         for f in files
