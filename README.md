@@ -1,169 +1,59 @@
 # Pirate Face Hub
 
-**Plug and play torrent downloads for Hugging Face models.** Add one package. Change nothing else.
+Downloads Hugging Face models over BitTorrent from [Pirate Face](https://pirateface.co) seeders. Your code stays the same.
 
-```sh
-uv run --with pirateface python your_script.py
-```
-
-or install it once and forget about it:
+## Install
 
 ```sh
 pip install pirateface
 ```
 
-That's the whole setup. No code changes, no config, no new API. Your script still calls transformers or
-`huggingface_hub` like it always did, and the files now come from [Pirate Face](https://pirateface.co)
-seeders over BitTorrent:
-
-```python
-from transformers import AutoModelForCausalLM
-
-model = AutoModelForCausalLM.from_pretrained("org/model")  # unchanged, now from the swarm
-```
-
-The same goes for anything that downloads through `huggingface_hub`: diffusers, sentence-transformers,
-`hf_hub_download`, `snapshot_download` and the `hf download` CLI.
-
-Every file is checked against Hugging Face's own fingerprint (SHA-256 for large files, git SHA-1 for the
-rest) before it goes into the normal Hugging Face cache. If Pirate Face doesn't have the model, a peer is
-missing, or a check fails, that file comes from Hugging Face as usual. Uninstall it and your code
-runs exactly as before.
-
-There's also a small CLI:
+Or without installing:
 
 ```sh
-pf download org/model [--revision REV] [--local-dir DIR]
-pf seed org/model [FOLDER]
-pf submit --repo org/model [--dry-run] FOLDER
-pf restore FILE.torrent|FOLDER [...]
+uv run --with pirateface python your_script.py
 ```
 
-## Share a model
+Anything that downloads through `huggingface_hub` (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual.
+
+Needs Python 3.12 or 3.13. With `uvx`, pass `-p 3.13`.
+
+## Commands
 
 ```sh
-pf seed org/model [FOLDER]
+pf download org/model      # download into the Hugging Face cache (--local-dir DIR for a folder)
+pf seed org/model [FOLDER] # seed a model, submitting it first if Pirate Face doesn't list it
+pf submit --repo org/model FOLDER  # package and submit a folder without the seed step (--dry-run to preview)
+pf work                    # build torrents for queued model requests, streamed from Hugging Face
+pf restore PATH            # upload .torrent files to fix a listing whose magnet stalls
 ```
 
-If Pirate Face lists the model, this adds its torrent to your torrent client, linked to the files you have
-(from FOLDER, or the Hugging Face cache), and the client seeds. If not, it builds a hybrid (v1 + v2) torrent,
-checks every file against Hugging Face, adds it to your client and submits it. Matching models are listed
-right away. With no FOLDER and nothing in the cache, it downloads the model first. Your files are only read;
-links to them go in `~/pirateface-seeds/<model>`.
+More `pf seed` options:
 
 ```sh
-pf seed --hf-cache         # every complete model in the Hugging Face cache, asking per model
-pf seed --update-trackers  # add your account's seeding tracker to torrents you already seed
-pf seed --update-per-file  # add per-file swarms for the models you already seed (see below)
-pf seed --no-per-file org/model  # only the model's torrent
+pf seed --hf-cache          # every complete model in your Hugging Face cache, asking per model
+pf seed --update-trackers   # add your seeding tracker to torrents you already seed
+pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent
+pf seed --no-per-file org/model  # skip per-file swarms
 ```
 
-When two uploads have the same file, Pirate Face gives that file its own swarm, shared by both.
-`pf seed` also adds that file's torrent for each of the model's files of 1 MiB or more that another listed
-upload also has, pointed at your copy: nothing is downloaded. The file isn't read again either when it was
-already verified (just hashed for a submission, or the model's torrent finished checking in your client);
-otherwise the client checks it first. The model's own torrent keeps seeding. This needs qBittorrent (the
-per-file torrents are BitTorrent v2 only) and a v2 or hybrid model torrent; older v1-only uploads are
-skipped. Links go in `~/pirateface-seeds/per-file`. `--no-per-file` turns it off. Per-file torrents are
-force-started, so they seed even when qBittorrent's queue is full; your model torrents keep your queue settings.
+`pf work --max-size 100` takes only models up to 100 GiB. `pf work --once` takes one job and exits.
 
-Seeding a file's own swarm also counts on your account: each per-file torrent announces to the same
-seeding tracker as your model torrents, so Pirate Face sees it (and weights it by the file's size, not the
-whole model's). `pf seed --update-trackers` adds that tracker to per-file torrents you added before this.
+`pf restore` takes `.torrent` files or a client folder, such as qBittorrent's `BT_backup` or Transmission's `torrents/`.
 
-Already seeding models in qBittorrent from before this? `pf seed --update-per-file` goes through the
-Pirate Face torrents qBittorrent has and does the same for each, from the files it already has: nothing is
-downloaded or submitted again. Running it again adds nothing twice.
+`pf submit --direct --repo your-org/model FOLDER` publishes your own model that isn't on Hugging Face.
 
-To submit one folder with `package.sh`'s flags:
-
-```sh
-pf submit --repo org/model [--revision COMMIT] [--name NAME] [--out DIR] [-y] ./model-folder
-pf submit --direct --repo your-org/model [--license ID] [--web-seed https://host/path/] ./model-folder
-```
-
-`--direct` publishes your own model (not on Hugging Face) under your Hugging Face username or one of your
-orgs; `--web-seed` is an https server with the files at `<url><name>/<path>`. `--dry-run` builds the torrent and
-prints the infohashes and the exact request, without adding anything to a client or submitting. It needs no key.
-
-Files whose names differ only in case, or that Windows can't store (`CON`, `nul.txt`, a trailing dot or
-space, `<>:"\|?*`), stop the run with a list to rename: downloaders on Windows and macOS would lose or
-fail on them. Files are linked, not copied; on Windows without Developer Mode `pf` uses hard links, so the
-output folder (`--out`) must be on the same drive as the model.
-
-It asks once for your key from [pirateface.co/account](https://pirateface.co/account) and saves it.
-`-y` skips every prompt; agents should pass it only on the user's explicit OK.
-
-| Variable | |
-|---|---|
-| `PIRATEFACE_KEY` | Account key (else asked and saved to `~/.config/pirateface/key`, on Windows `%APPDATA%\pirateface\key`) |
-| `PIRATEFACE_SEEDS` | Where the links and `.torrent` files go (default `~/pirateface-seeds`) |
-| `HF_TOKEN` | For gated repos |
-| `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
-| `QBT_URL`, `QBT_USER`, `QBT_PASS` | qBittorrent Web UI (default `http://localhost:8080`) |
-
-## Restore a torrent
-
-If a listed torrent on Pirate Face is missing its `.torrent` metadata and magnets stall, upload your `.torrent`
-file(s) or point `pf restore` at your torrent client's backup folder:
-
-```sh
-pf restore path/to/model.torrent [more.torrent ...]
-pf restore ~/.local/share/qBittorrent/BT_backup
-```
-
-It prints per file whether metadata was restored, already present, or not listed. Uses the same `PIRATEFACE_KEY`
-as `pf seed`.
-
-Where clients store `.torrent` files:
-
-- **qBittorrent (`BT_backup`):**
-  - Linux: `~/.local/share/qBittorrent/BT_backup/`
-  - macOS: `~/Library/Application Support/qBittorrent/BT_backup/`
-  - Windows: `%LOCALAPPDATA%\qBittorrent\BT_backup\`
-- **Transmission (`torrents/`):**
-  - Linux: `~/.config/transmission/torrents/` (daemon: `/var/lib/transmission-daemon/.config/transmission-daemon/torrents/`)
-  - macOS: `~/Library/Application Support/Transmission/Torrents/`
-  - Windows: `%LOCALAPPDATA%\transmission\Torrents\`
-
-## Models only on Pirate Face
-
-Some models are only on Pirate Face (published there directly, or removed from Hugging Face). They load
-like any other model. When Hugging Face says a repo doesn't exist, the hook asks Pirate Face, answers
-huggingface_hub from Pirate Face's file list, downloads over BitTorrent and checks every file's SHA-256.
-For Pirate Face's own namespace, `pirateface/`, Pirate Face is asked first and Hugging Face never is.
-
-## How it hooks in
-
-The package installs `pirateface.pth`, which Python runs at startup. It does nothing until something
-imports `huggingface_hub`, then fetches each file's bytes from the swarm. Hugging Face still answers
-which commit and fingerprint to expect, and every file from the swarm is checked against it. If Pirate
-Face has no torrent, or no peer sends the file list within 30 s, the file comes from Hugging Face as usual.
-Cache layout, symlinks and locks stay with `huggingface_hub`.
+`pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/account](https://pirateface.co/account). Run `pf <command> --help` for every flag.
 
 ## Settings
 
-| Variable | Default | |
-|---|---|---|
-| `PF_DISABLE` | off | Turn the hook off |
-| `PF_QUIET` | off | Print nothing |
-| `PF_NO_RESCUE` | off | Don't ask Pirate Face to add models it doesn't have yet |
-| `PF_DEBUG` | off | Print libtorrent's log |
-| `PF_CACHE` | `~/.cache/pirateface` | Where torrent data and file lists are kept |
-| `PF_API` | `https://pirateface.co` | Pirate Face server |
-| `PF_LISTEN` | any free port | libtorrent listen interfaces |
-| `PF_METADATA_TIMEOUT` | `30` | Seconds to wait for a peer to send the file list |
-| `PF_STALL_TIMEOUT` | `60` | Seconds without progress before falling back to Hugging Face |
-| `PF_ONLY_STALL_TIMEOUT` | `600` | The same for models only on Pirate Face (no Hugging Face to fall back to) |
-
-Flags are on for any value except empty or `0`.
-
-Needs Python 3.12 or 3.13 (libtorrent has no wheels for 3.14 yet). `uvx` picks the newest Python it has,
-so pass the version:
-
-```sh
-uvx -p 3.13 --with pirateface --from huggingface_hub hf download org/model
-```
+| Variable | |
+|---|---|
+| `PIRATEFACE_KEY` | Account key (otherwise asked once and saved) |
+| `QBT_URL`, `QBT_USER`, `QBT_PASS` | qBittorrent Web UI (default `http://localhost:8080`) |
+| `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
+| `HF_TOKEN` | For gated repos |
+| `PF_DISABLE` | Set to `1` to turn the download hook off |
 
 ## Development
 
