@@ -10,6 +10,7 @@ from pathlib import Path
 
 import libtorrent as lt
 
+from pirateface.config import SEEDS
 from pirateface.seed import hybrid
 
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
@@ -20,6 +21,18 @@ SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|par
 # characters, and a trailing dot or space.
 WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.IGNORECASE)
 WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
+
+
+def seeds_folder(repo, v1):
+    """The seed folder for a repo: author--model, as the Hugging Face cache names it, so two authors can
+    publish models of the same name. An old <model> folder that already holds this same torrent keeps its
+    place (its .torrent has this v1 infohash): nothing is renamed or moved, so a client seeding it is fine."""
+    old, new = Path(repo.split("/")[1]), Path(repo.replace("/", "--"))
+    for tor in Path(SEEDS, old).glob("*.torrent"):
+        with contextlib.suppress(Exception):  # unreadable or not a torrent: not this one
+            if str(lt.torrent_info(tor.read_bytes()).info_hashes().v1) == v1:
+                return old
+    return new
 
 
 class LinkError(Exception):
