@@ -111,5 +111,7 @@ def update_all():
         if not labels:
             continue
         print(f"      {len(labels)} {why}:")
-        for label in labels:
+        for label in labels[:20]:
             print(f"        {label}")
+        if len(labels) > 20:
+            print(f"        … and {len(labels) - 20} more")
