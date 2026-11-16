@@ -2,23 +2,27 @@
 
 import sys
 import threading
+import time
 
 from pirateface.seed import hybrid
 from pirateface.work import site, source
 from pirateface.work.errors import WorkError
 
 RENEW_SECONDS = 10  # the rescue board reads this; the site drops a lease after 10 minutes without one
+RENEW_UNREACHABLE_SECONDS = 300  # half the lease lapse: beyond this a lost lease can't be renewed
 REPORT_BYTES = 1 << 30
 
 
 class Lease:
     """Renews the lease from a daemon thread every RENEW_SECONDS, so the stream's reads never block
     on the HTTPS call, and reports bytes so the rescue board can draw the lane. A lost lease stops the
-    job: the thread records the error and the next note() raises it."""
+    job: the thread records the error and the next note() raises it. A site that can't be reached is
+    not a lost lease: renewals keep trying until the outage passes RENEW_UNREACHABLE_SECONDS."""
 
     def __init__(self, key, lease_id, total, name=None):
         self.key, self.id, self.total, self.done, self.name = key, lease_id, total, 0, name
         self._error = None
+        self._down_since = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._renew_loop, daemon=True)
 
@@ -31,10 +35,23 @@ class Lease:
                 return
 
     def renew(self):
-        """Renew the lease now: the thread on its timer, build once at each end of the job."""
+        """Renew the lease now: the thread on its timer, build once at each end of the job. A network
+        error (status 0) is only fatal once the site has been unreachable for RENEW_UNREACHABLE_SECONDS;
+        any real non-200 answer means the lease is gone."""
         status, body = site.renew(self.key, self.id, self.done, self.total, self.name)
-        if status != 200:
-            raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
+        if status == 200:
+            self._down_since = None
+            return
+        if status == 0:
+            if self._down_since is None:
+                self._down_since = time.monotonic()
+            if time.monotonic() - self._down_since > RENEW_UNREACHABLE_SECONDS:
+                raise WorkError(
+                    f"the site has been unreachable for {RENEW_UNREACHABLE_SECONDS // 60} minutes; "
+                    "the lease has lapsed and the request is back in the queue"
+                )
+            return  # within the grace window: keep renewing on the timer
+        raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
 
     def note(self, n):
         self.done += n
