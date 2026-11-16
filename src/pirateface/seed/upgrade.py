@@ -86,19 +86,17 @@ def send_upgrade(key, v1, data, manifest):
 
 def rebuild(repo):
     key = user.load_key()
-    qbt = _qbittorrent()
-    upgrade_one(qbt, key, repo)
+    if upgrade_one(_qbittorrent(), key, repo) is None:
+        ui.layer_block([("model", "hybrid v1+v2")], "pf seed --upgrade")
 
 
-def upgrade_one(qbt, key, repo, infohash=None, totals=None):
-    """Upgrade repo's listed v1 torrent (or the one with that infohash). Returns "upgraded" or "already" (its .torrent
-    is hybrid now); raises SeedError when it cannot be upgraded. totals, when set, sums per-file counts and the
-    caller prints one layer block."""
+def upgrade_one(qbt, key, repo, infohash=None, report=True):
+    """Upgrade repo's listed v1 torrent (or the one with that infohash). Returns its per-file counts
+    (seed_model's), or None when its .torrent is hybrid already; raises SeedError when it cannot be
+    upgraded. report: seed_model prints its layer block; a caller summing several models prints one."""
     listed = listed_v1(repo, infohash)
     if not listed:
-        if totals is None:
-            ui.layer_block([("model", "hybrid v1+v2")], "pf seed --upgrade")
-        return "already"
+        return None
     old, name, v1 = listed
     entry, folder, files = complete_copy(qbt, repo, old, v1, name)
     print(f"==> Rebuilding {repo} as a hybrid torrent from {folder}")
@@ -110,11 +108,7 @@ def upgrade_one(qbt, key, repo, infohash=None, totals=None):
     _remove(qbt, entry)
     print(f"    Seeding the hybrid ({new_v1}) from the same files; the v1 torrent is out of qBittorrent.")
     print("    Seeders of the old torrent get told to switch: pf seed --upgrade")
-    stats = seed_model(data, entry["save_path"], new_v1, verified=True, label=repo, report=totals is None)
-    if totals is not None:
-        totals["added"] += stats["added"]
-        totals["skipped"] += stats["skipped"]
-    return "upgraded"
+    return seed_model(data, entry["save_path"], new_v1, verified=True, label=repo, report=report)
 
 
 def upgrade_mine():
@@ -130,23 +124,17 @@ def upgrade_mine():
         print("    You have no listed v1-only torrents to upgrade.")
         return
     print(f"==> Upgrading your {len(mine)} listed v1 torrents")
-    done = already = 0
-    problems = []
-    totals = {"added": 0, "skipped": 0}
+    results, problems = [], []  # results: one upgrade_one() answer per model it did not fail on
     for row in mine:
-        repo = row["repo"]
         try:
-            state = upgrade_one(qbt, key, repo, row["infohash"], totals)
+            results.append(upgrade_one(qbt, key, row["repo"], row["infohash"], report=False))
         except SeedError as e:
-            problems.append(f"{repo}: {e}")
-        else:
-            if state == "upgraded":
-                done += 1
-            else:
-                already += 1
+            problems.append(f"{row['repo']}: {e}")
+    upgraded = [r for r in results if r is not None]
+    done, already = len(upgraded), len(results) - len(upgraded)
     rows = [
         ("model", f"{done} upgraded, {already} already hybrid"),
-        ("per-file", f"{totals['added']} added, {totals['skipped']} skipped"),
+        ("per-file", f"{sum(r['added'] for r in upgraded)} added, {sum(r['skipped'] for r in upgraded)} skipped"),
     ]
     if problems:
         rows.append(("could not", str(len(problems))))
