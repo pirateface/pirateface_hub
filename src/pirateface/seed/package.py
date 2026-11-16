@@ -1,10 +1,10 @@
 """Model folder -> links, checksums and a hybrid (v1 + v2) torrent."""
 
 import concurrent.futures
+import contextlib
 import hashlib
 import os
 import re
-import shutil
 import urllib.parse
 from pathlib import Path
 
@@ -27,7 +27,10 @@ class LinkError(Exception):
 
 
 def link(target, dest):
-    """Symlink dest to target; a hard link where symlinks need rights (Windows without Developer Mode)."""
+    """Symlink dest to target; a hard link where symlinks need rights (Windows without Developer Mode).
+    A real file already at dest is kept: it is the file itself, or one the torrent client downloaded."""
+    if dest.exists() and not dest.is_symlink():
+        return
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         dest.symlink_to(target)
@@ -57,9 +60,22 @@ def unportable(paths):
     return list(dict.fromkeys(problems))
 
 
+def clear_links(dest):
+    """Remove the links an earlier run left under dest, and the folders that empties. Real files stay:
+    dest can hold the user's files, or files their torrent client downloaded."""
+    if not dest.is_dir() or dest.is_symlink():
+        return
+    for d, _, names in os.walk(dest, topdown=False):
+        for n in names:
+            if Path(d, n).is_symlink():
+                Path(d, n).unlink()
+        with contextlib.suppress(OSError):
+            Path(d).rmdir()
+
+
 def stage(src, dest):
     """Link the model files in src into dest. Returns (included paths, skipped paths)."""
-    shutil.rmtree(dest, ignore_errors=True)
+    clear_links(dest)
     included, skipped = [], []
     for d, _, names in os.walk(src, followlinks=True):
         for n in names:
@@ -68,14 +84,19 @@ def stage(src, dest):
     problems = unportable(sorted(included))
     if problems:
         raise LinkError("rename or remove these files first:\n    " + "\n    ".join(problems[:20]))
-    for rel in sorted(included):
-        link(Path(src, rel).absolute(), dest / rel)
+    if Path(src).resolve() != Path(dest).resolve():
+        # src is dest: the files are already where the torrent is built from; linking would be self-links.
+        for rel in sorted(included):
+            link(Path(src, rel).absolute(), dest / rel)
     return sorted(included), sorted(skipped)
 
 
 def link_existing(src, dest, paths):
     """Link the files of a listed torrent that src already has. Returns how many."""
-    shutil.rmtree(dest, ignore_errors=True)
+    if Path(src).resolve() == Path(dest).resolve():
+        # src is dest: the files (or the links to them) are already where the client seeds from.
+        return sum(1 for p in paths if Path(src, p).is_file())
+    clear_links(dest)
     found = [p for p in paths if Path(src, p).is_file()]
     for p in found:
         link(Path(src, p).absolute(), dest / p)
