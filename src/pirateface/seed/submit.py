@@ -325,12 +325,7 @@ def submit(args):
         raise SeedError(f"{name!r} can't be a folder name on Windows; pass --name")
     out = Path(args.out) if args.out else Path.cwd() / f"pirateface-{name}"
     # A dry run needs no key: without one the torrent gets only the public trackers (same infohash).
-    if args.dry_run:
-        key = os.environ.get("PIRATEFACE_KEY") or (
-            user.KEY_FILE.read_text().strip() if user.KEY_FILE.exists() else None
-        )
-    else:
-        key = user.load_key()
+    key = user.read_key() if args.dry_run else user.load_key()
     submit_new(
         args.repo,
         src,
