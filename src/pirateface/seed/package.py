@@ -93,6 +93,9 @@ def stage(src, dest):
 
 def link_existing(src, dest, paths):
     """Link the files of a listed torrent that src already has. Returns how many."""
+    if Path(src).resolve() == Path(dest).resolve():
+        # src is dest: the files (or the links to them) are already where the client seeds from.
+        return sum(1 for p in paths if Path(src, p).is_file())
     clear_links(dest)
     found = [p for p in paths if Path(src, p).is_file()]
     for p in found:
