@@ -247,7 +247,10 @@ def submit_new(
     A dry run stops before the torrent client and the POST, and prints what it would send."""
     check_client_version()
     name = name or repo.split("/")[1]
-    out = Path(out or Path(SEEDS, name))
+    # The shared-seeds default keeps each author in their own author--model folder (seed/package.py:seeds_folder
+    # applies the same name; seed_listed reuses an old <model> folder that already holds the torrent). An
+    # explicit out is used as given; pf submit's own ./pirateface-NAME default is one.
+    out = Path(out or Path(SEEDS, repo.replace("/", "--")))
     save_dir = out / "files"
     answers = Answers(dry_run)
     # The torrent carries this account's seeding tracker. Trackers are outside the info dict,
