@@ -1,10 +1,12 @@
 import atexit
 import contextlib
 import os
+import posixpath
 import shutil
 import sys
 import threading
 import time
+import unicodedata
 import urllib.parse
 from importlib.metadata import version
 from pathlib import Path
@@ -13,11 +15,13 @@ import libtorrent as lt
 
 from pirateface import config, ui
 from pirateface.client import api
+from pirateface.paths import WINDOWS_INVALID, WINDOWS_RESERVED
 
 CACHE_DIR = Path(config.CACHE_DIR)
 _lock = threading.Lock()
 _session = None
 _handles = {}  # repo_id -> handle, or None if not on Pirate Face
+_refused = {}  # repo_id -> why its listing was refused, so the other files of it say the same
 _wanted = {}
 _active = {}  # repo_id -> fetch_file calls currently downloading
 _setup = {}  # repo_id -> lock serialising handle setup
@@ -28,6 +32,11 @@ _idle_cv = threading.Condition(_lock)  # signalled when a repo's in-flight fetch
 
 class Unavailable(Exception):
     pass
+
+
+class Unsafe(Unavailable):
+    """The torrent lists a path this client will not write: one that leaves the torrent's own folder, one
+    that lands on another file's name on Windows or macOS, or a name Windows or macOS cannot store."""
 
 
 def _get_session():
@@ -159,9 +168,27 @@ def _handle(repo_id, resume=None):
                 _handles[repo_id] = None
                 raise TimeoutError("no peer sent the file list in time")
             time.sleep(0.2)
+        # libtorrent writes the torrent's own paths under save_path, so a listing we cannot write has to be
+        # refused here: nothing has been prioritised and every file is still skipped (default_dont_download),
+        # so no byte is downloaded and no file of the torrent's is created before this raises.
+        info = lt.bdecode(h.torrent_file().info_section())
+        try:
+            files_in(lt.bencode({"info": info}))
+        except Exception as e:
+            # Any listing we will not or cannot read leaves nothing behind: no handle, no cached .torrent.
+            _get_session().remove_torrent(h)
+            with contextlib.suppress(OSError):
+                saved.unlink()  # the .torrent we cached from the site, kept for nothing
+            if not isinstance(e, Unsafe):
+                raise
+            # Remember why, so the repo's other files go straight to Hugging Face instead of waiting for
+            # metadata again -- and still get the reason, not a bare "unavailable".
+            _handles[repo_id] = None
+            _refused[repo_id] = str(e)
+            raise
         if not saved.exists():
             saved.parent.mkdir(parents=True, exist_ok=True)
-            saved.write_bytes(lt.bencode({"info": lt.bdecode(h.torrent_file().info_section())}))
+            saved.write_bytes(lt.bencode({"info": info}))
         _handles[repo_id] = h
         threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
         fs = h.torrent_file().files()
@@ -228,10 +255,18 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
 
 def _file_index(ti, filename):
     fs = ti.files()
+    rels = []
     for i in range(fs.num_files()):
         path = fs.file_path(i).replace(os.sep, "/")
-        rel = path.split("/", 1)[1] if fs.num_files() > 1 and "/" in path else path
+        rels.append((i, path.split("/", 1)[1] if fs.num_files() > 1 and "/" in path else path))
+    for i, rel in rels:
         if rel == filename:
+            return i
+    # An upload that repeated the torrent's name is written one level down. That form is only accepted when
+    # no entry carries the name exactly, so an exact entry -- a real folder of the same name -- always wins.
+    name = ti.name()
+    for i, rel in rels:
+        if _repo_path(name, rel) == filename:
             return i
     return None
 
@@ -245,7 +280,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
         with _setup_lock(repo_id):
             h = _handle(repo_id)
             if h is None:
-                raise Unavailable()
+                raise Unavailable(_refused.get(repo_id, ""))
             # A model download fetches files one at a time. After the last wanted file
             # completes the torrent goes "finished" and libtorrent drops the web seed,
             # so the next file never gets bytes and stalls until PF_STALL_TIMEOUT.
@@ -272,7 +307,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
                     _handles.pop(repo_id, None)
                 h = _handle(repo_id, resume)
                 if h is None:
-                    raise Unavailable()
+                    raise Unavailable(_refused.get(repo_id, ""))
 
             ti = h.torrent_file()
             i = _file_index(ti, filename)
@@ -325,20 +360,102 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
                 _idle_cv.notify_all()
 
 
-def files_in(data):
-    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out."""
+PAD_DIR = ".pad"
+
+
+def _entry_path(name, parts):
+    """An entry's path inside the torrent's folder, or Unsafe naming it. Nothing here may point outside
+    that folder, whatever the platform's idea of an absolute path is."""
+    shown = "/".join(parts) or name
+    for part in parts:
+        if part in ("", ".", "..") or "/" in part or "\\" in part:
+            raise Unsafe(f"{name}: refusing {shown!r}: it does not stay inside the torrent's folder")
+        if len(part) == 2 and part[1] == ":" and part[0].isalpha():
+            raise Unsafe(f"{name}: refusing {shown!r}: {part!r} is a drive letter")
+        if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
+            # The same test seed/package.py applies before it packages a folder. A name libtorrent has to
+            # rewrite ("a?b" -> "a_b") can never be matched to the Hugging Face file afterwards, so a listing
+            # holding one is refused instead of left half-usable.
+            raise Unsafe(f"{name}: refusing {shown!r}: {part!r} is not a name Windows can store")
+    path = "/".join(parts)
+    if posixpath.normpath(f"{name}/{path}") != f"{name}/{path}":
+        raise Unsafe(f"{name}: refusing {shown!r}: it does not stay inside the torrent's folder")
+    return path
+
+
+def _repo_path(name, path):
+    """The path Hugging Face lists a file under: some uploads repeat the torrent's own name as the first
+    component, and libtorrent still writes it one level down."""
+    first, sep, rest = path.partition("/")
+    return rest if sep and first == name else path
+
+
+def _listing(data):
+    """(the torrent's name, [(path inside its folder, size, web seed URL or None)]), BEP 47 pads left out.
+
+    The one place a .torrent's paths are read, and so the one place that decides which of them this client
+    will write: a path that leaves the folder, lands on another file's name on Windows or macOS, or is a
+    name Windows cannot store is refused here, with Unsafe naming it, before anything is downloaded."""
     torrent = lt.bdecode(data)
     info = torrent[b"info"]
-    name = info[b"name"].decode()
+    try:
+        name = info[b"name"].decode()
+    except UnicodeDecodeError as e:
+        raise Unsafe(f"the torrent's name is not UTF-8: {info[b'name'][:80]!r}") from e
+    _entry_path(name, [name])  # the folder's own name is a path too
     if b"files" not in info:
-        return [(name, info[b"length"], web_seed_url(torrent, name))]
+        if b"length" not in info:
+            raise Unsafe(f"{name}: the torrent has no file list this client can read")  # BEP 52 v2 only
+        return name, [(name, info[b"length"], web_seed_url(torrent, name))]
     files = []
+    seen = {}
     for f in info[b"files"]:
         if b"p" in f.get(b"attr", b""):
             continue
-        path = "/".join(part.decode() for part in f[b"path"])
+        try:
+            parts = [part.decode() for part in f[b"path"]]
+        except UnicodeDecodeError as e:
+            raise Unsafe(f"{name}: refusing {f[b'path']!r}: a path that is not UTF-8") from e
+        if not parts:
+            raise Unsafe(f"{name}: a file in the torrent has no path")
+        path = _entry_path(name, parts)  # checked before anything is skipped or used
+        if parts[0] == PAD_DIR:
+            continue  # a pad folder written out by hand, without attr=p to say so
+        key = unicodedata.normalize("NFC", path).casefold()  # one file on Windows, macOS and an NFC filesystem
+        if key in seen:
+            raise Unsafe(f"{name}: refusing {path!r}: {seen[key]!r} is the same file on Windows and macOS")
+        seen[key] = path
         files.append((path, f[b"length"], web_seed_url(torrent, f"{name}/{path}")))
-    return files
+    # An entry cannot also be the folder another entry lives in: libtorrent would rename one of them ("a.1")
+    # and the renamed file could never be matched again. package.unportable() refuses the same listings.
+    for path in seen.values():
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            folder = "/".join(parts[:i])
+            folder_key = unicodedata.normalize("NFC", folder).casefold()
+            if folder_key in seen:
+                raise Unsafe(f"{name}: refusing {path!r}: {seen[folder_key]!r} is a file, not a folder")
+    return name, files
+
+
+def files_in(data):
+    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out, paths
+    relative to the torrent's own folder -- the layout libtorrent writes under the download folder."""
+    return _listing(data)[1]
+
+
+def repo_files(data):
+    """(path, size, URL) per file, plus the path with a repeated torrent name stripped where the two differ
+    and no entry really has that name: every path Hugging Face could list these bytes under."""
+    name, files = _listing(data)
+    exact = {path for path, _, _ in files}
+    out = []
+    for path, size, url in files:
+        stripped = _repo_path(name, path)
+        if stripped != path and stripped not in exact:  # otherwise a real file of that name owns the key
+            out.append((stripped, size, url))
+        out.append((path, size, url))
+    return out
 
 
 def web_seed_url(torrent, path_in_torrent):

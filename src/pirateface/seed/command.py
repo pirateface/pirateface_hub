@@ -48,7 +48,11 @@ def seed_listed(repo, src, key, per_file=False):
     data = api.torrent_file(repo, matching_quant(repo, src))
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
-    paths = [p for p, _, _ in torrent.files_in(data)]
+    try:
+        paths = [p for p, _, _ in torrent.files_in(data)]
+    except torrent.Unsafe as e:
+        # Seeding would link these paths into the seed folder; a listing we can't write stays refused.
+        raise SeedError(f"Pirate Face's .torrent for {repo} can't be written safely ({e})") from e
     mine = weights(src, [str(p.relative_to(src)) for p in Path(src).rglob("*")]) if src else set()
     if mine and not weights(src, paths):
         # Another quant of this revision: seeding the listed torrent would download it instead.

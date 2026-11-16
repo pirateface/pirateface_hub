@@ -10,16 +10,11 @@ from pathlib import Path
 
 import libtorrent as lt
 
+from pirateface.paths import WINDOWS_INVALID, WINDOWS_RESERVED
 from pirateface.seed import hybrid
 
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
-
-
-# Names Windows can't store: reserved device names (with any extension), <>:"\\|?* and control
-# characters, and a trailing dot or space.
-WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.IGNORECASE)
-WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
 
 
 class LinkError(Exception):
