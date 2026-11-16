@@ -13,7 +13,7 @@ def add_newest(mine):
     Safe to re-run: a client that already has it is left alone."""
     try:
         data = api.torrent_file(INDEX_REPO)
-    except Exception:  # the site is down: nothing to add this time
+    except api.Unreachable:  # the site is down: nothing to add this time
         data = None
     if not data:
         print(f"    Magnet index: could not get the newest build from {API}; trying again next run.")

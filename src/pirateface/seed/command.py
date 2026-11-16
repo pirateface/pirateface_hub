@@ -100,8 +100,8 @@ def update_trackers():
         raise SeedError(f"could not get your seeding tracker from {API}/api/trackers (key rejected or site down)")
     print("==> Adding your seeding tracker to Pirate Face torrents")
     try:
-        index_seeding.add_newest(mine)
         clients.update_trackers(mine)
+        index_seeding.add_newest(mine)
     except RuntimeError as e:
         raise SeedError(str(e)) from e
     print("    Done. Pirate Face counts your seeding from the next announce (within 10 minutes).")
