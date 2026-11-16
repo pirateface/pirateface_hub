@@ -86,10 +86,11 @@ def build_torrent(src, save_dir, name, trackers):
 
 
 def check_hugging_face(repo, revision, license, sums, licenses, answers):
-    """Compare the hashes with Hugging Face. Returns (every LFS hash matches, revision, Hugging Face's license id)."""
+    """Compare the hashes with Hugging Face. Returns (match, revision, Hugging Face's license id). match is
+    "n of the m" LFS files that are in the torrent and match, when at least one is and none differs, else None."""
     # If every Hugging Face LFS hash matches, it's listed right away instead of going to review.
     print(f"==> Checking against huggingface.co/{repo}")
-    match = False
+    match = None
     try:
         commit, card, remote = hub.model(repo, revision)
         lfs = {p: h for p, (h, is_lfs) in remote.items() if is_lfs}
@@ -102,7 +103,7 @@ def check_hugging_face(repo, revision, license, sums, licenses, answers):
             print(f"    MISMATCH  {p}")
         for p in missing:
             print(f"    not in torrent  {p}")
-        match = bool(lfs) and not bad
+        match = f"{matched} of the {len(lfs)}" if matched and not bad else None
     except Exception as e:
         print(f"    could not read it from Hugging Face ({e}); the review team will check by hand")
         commit, hf_license = None, "-"
@@ -145,7 +146,8 @@ def evidence_for(repo, revision, lic, match, direct, command, answers):
     if match:
         return (
             f"Source: https://huggingface.co/{repo} at revision {revision}. License per model card: {lic}. "
-            f"All Hugging Face LFS SHA-256 hashes at that revision match the local copy (checked by {command})."
+            f"{match} Hugging Face LFS files at that revision are in this torrent, and their SHA-256 hashes match "
+            f"the local copy (checked by {command})."
         )
     if direct:
         return f"Direct listing: published on Pirate Face by {repo.split('/')[0]} itself, not on Hugging Face. License: {lic}."
@@ -264,7 +266,7 @@ def submit_new(
         licenses = api.licenses()
     except OSError as e:
         raise SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
-    match = False
+    match = None
     if direct:
         # Direct listing: not on Hugging Face. The revision is the torrent's v1 infohash.
         print("==> Direct listing: skipping the Hugging Face check")
