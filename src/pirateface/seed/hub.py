@@ -21,11 +21,16 @@ class _SameHostAuth(urllib.request.HTTPRedirectHandler):
 urlopen = urllib.request.build_opener(_SameHostAuth).open
 
 
-def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": f"pirateface/{version('pirateface')}"})
+def headers():
+    """Headers for a request to Hugging Face: pf's User-Agent, and HF_TOKEN as a bearer token when set."""
+    h = {"User-Agent": f"pirateface/{version('pirateface')}"}
     if os.environ.get("HF_TOKEN"):
-        req.add_header("Authorization", "Bearer " + os.environ["HF_TOKEN"])
-    with urlopen(req, timeout=30) as r:
+        h["Authorization"] = "Bearer " + os.environ["HF_TOKEN"]
+    return h
+
+
+def _get(url):
+    with urlopen(urllib.request.Request(url, headers=headers()), timeout=30) as r:
         return json.load(r)
 
 

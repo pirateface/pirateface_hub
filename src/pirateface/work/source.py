@@ -8,7 +8,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from pirateface.client import api
 from pirateface.seed import hub
 from pirateface.work.errors import WorkError
 
@@ -96,7 +95,4 @@ class Stream:
 def open_file(repo, revision, path, on_read, on_end):
     """A Stream for one file."""
     url = f"{HF}/{repo}/resolve/{urllib.parse.quote(revision)}/{urllib.parse.quote(path)}"
-    headers = {"User-Agent": f"pirateface/{api.VERSION}"}
-    if os.environ.get("HF_TOKEN"):
-        headers["Authorization"] = "Bearer " + os.environ["HF_TOKEN"]
-    return Stream(url, headers, path, on_read, on_end)
+    return Stream(url, hub.headers(), path, on_read, on_end)
