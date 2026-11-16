@@ -1,6 +1,7 @@
 """HTTP calls to the Pirate Face work endpoints: lease, renew and complete a job."""
 
 import base64
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -10,7 +11,8 @@ from pirateface.config import API
 
 
 def request(method, path, key, body=None, timeout=120):
-    """(HTTP status, JSON answer or None). Errors come back as statuses, not exceptions."""
+    """(HTTP status, JSON answer or None). Errors come back as statuses, not exceptions: 0 when the
+    site could not be reached at all."""
     req = urllib.request.Request(
         f"{API}{path}",
         data=None if body is None else json.dumps(body).encode(),
@@ -30,6 +32,8 @@ def request(method, path, key, body=None, timeout=120):
             return e.code, json.load(e)
         except Exception:
             return e.code, {"error": e.reason}
+    except (OSError, http.client.HTTPException) as e:  # DNS, refused, reset, timeout, truncated answer
+        return 0, {"error": f"could not reach {API} ({e})"}
 
 
 def lease(key, name=None, max_bytes=None):
