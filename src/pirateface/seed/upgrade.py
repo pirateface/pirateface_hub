@@ -10,6 +10,7 @@ replacement, so you keep seeding the swarm that is listed."""
 import base64
 from pathlib import Path
 
+from pirateface import ui
 from pirateface.client import api, torrent
 from pirateface.config import API
 from pirateface.seed import clients, hybrid, package, user
@@ -86,11 +87,14 @@ def rebuild(repo):
     upgrade_one(qbt, key, repo)
 
 
-def upgrade_one(qbt, key, repo, infohash=None):
+def upgrade_one(qbt, key, repo, infohash=None, totals=None):
     """Upgrade repo's listed v1 torrent (or the one with that infohash). Returns "upgraded" or "already" (its .torrent
-    is hybrid now); raises SeedError when it cannot be upgraded."""
+    is hybrid now); raises SeedError when it cannot be upgraded. totals, when set, sums per-file counts and the
+    caller prints one layer block."""
     listed = listed_v1(repo, infohash)
     if not listed:
+        if totals is None:
+            ui.layer_block([("model", "hybrid v1+v2")], "pf seed --upgrade")
         return "already"
     old, name, v1 = listed
     entry, folder, files = complete_copy(qbt, repo, old, v1, name)
@@ -103,7 +107,10 @@ def upgrade_one(qbt, key, repo, infohash=None):
     _remove(qbt, entry)
     print(f"    Seeding the hybrid ({new_v1}) from the same files; the v1 torrent is out of qBittorrent.")
     print("    Seeders of the old torrent get told to switch: pf seed --upgrade")
-    seed_model(data, entry["save_path"], new_v1, verified=True, label=repo)
+    stats = seed_model(data, entry["save_path"], new_v1, verified=True, label=repo, report=totals is None)
+    if totals is not None:
+        totals["added"] += stats["added"]
+        totals["skipped"] += stats["skipped"]
     return "upgraded"
 
 
@@ -122,10 +129,11 @@ def upgrade_mine():
     print(f"==> Upgrading your {len(mine)} listed v1 torrents")
     done = already = 0
     problems = []
+    totals = {"added": 0, "skipped": 0}
     for row in mine:
         repo = row["repo"]
         try:
-            state = upgrade_one(qbt, key, repo, row["infohash"])
+            state = upgrade_one(qbt, key, repo, row["infohash"], totals)
         except SeedError as e:
             problems.append(f"{repo}: {e}")
         else:
@@ -133,7 +141,14 @@ def upgrade_mine():
                 done += 1
             else:
                 already += 1
-    print(f"    {done} upgraded, {already} already hybrid, {len(problems)} could not.")
+    rows = [
+        ("model", f"{done} upgraded, {already} already hybrid"),
+        ("per-file", f"{totals['added']} added, {totals['skipped']} skipped"),
+    ]
+    if problems:
+        rows.append(("could not", str(len(problems))))
+    nxt = "pf seed --upgrade" if done == 0 and already and not problems else None
+    ui.layer_block(rows, nxt)
     if problems:
         print("    Not upgraded:")
         for line in problems:
@@ -174,4 +189,5 @@ def switch_all():
             switched += 1
         elif status:
             skipped += 1
-    print(f"    {switched} switched, {skipped} skipped. Then: pf seed --update-per-file")
+    nxt = "pf seed --update-per-file" if switched else None
+    ui.layer_block([("model", f"{switched} switched, {skipped} skipped")], nxt)
