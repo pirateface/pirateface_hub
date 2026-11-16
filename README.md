@@ -36,7 +36,8 @@ pf seed --update-trackers   # add your seeding tracker to torrents you already s
 pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent, then say which can't
 pf seed --no-per-file org/model  # skip per-file swarms
 pf seed --upgrade org/model # relist your v1-only torrent as hybrid (v1 + v2) so its files get per-file swarms
-pf seed --upgrade           # switch torrents Pirate Face replaced to their replacements
+pf seed --upgrade --mine  # the same for every v1 torrent you submitted that has a complete copy in qBittorrent
+pf seed --upgrade         # switch torrents Pirate Face replaced to their replacements
 ```
 
 `pf seed --update-per-file` then lists the two kinds of model you can act on: v1-only ones

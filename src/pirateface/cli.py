@@ -67,6 +67,12 @@ def _main():
         "without: switch torrents Pirate Face replaced to their replacement (qBittorrent)",
     )
     s.add_argument(
+        "--mine",
+        action="store_true",
+        help="with --upgrade: every v1 torrent you submitted that has a complete copy in qBittorrent, "
+        "not one at a time",
+    )
+    s.add_argument(
         "--per-file",
         action=argparse.BooleanOptionalAction,
         default=True,
