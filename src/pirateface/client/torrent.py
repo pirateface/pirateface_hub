@@ -18,6 +18,7 @@ CACHE_DIR = Path(config.CACHE_DIR)
 _lock = threading.Lock()
 _session = None
 _handles = {}  # repo_id -> handle, or None if not on Pirate Face
+_NOT_CACHED = object()  # _handles.get() sentinel: a remembered None means "not on Pirate Face"
 _wanted = {}
 _active = {}  # repo_id -> fetch_file calls currently downloading
 _setup = {}  # repo_id -> lock serialising handle setup
@@ -80,8 +81,8 @@ def _pump_alerts(session, debug):
 def _cleanup():
     if _session is None:
         return
-    # Never block interpreter exit behind a fetch thread holding _lock (up to
-    # METADATA_TIMEOUT): give up on the snapshot and let the OS reclaim files.
+    # Never block interpreter exit behind a fetch thread holding _lock: give up on the snapshot
+    # and let the OS reclaim files.
     if not _lock.acquire(timeout=1):
         return
     try:
@@ -124,56 +125,97 @@ def _setup_lock(repo_id):
         return _setup.setdefault(repo_id, threading.Lock())
 
 
-def _handle(repo_id, resume=None):
+def _remembered(repo_id):
+    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo (a
+    remembered None means "not on Pirate Face")."""
     with _lock:
-        if repo_id in _handles:
-            return _handles[repo_id]
-        try:
-            magnet = api.lookup_magnet(repo_id)
-        except api.Unreachable as e:
-            # Don't cache this as "not on Pirate Face": the site may be back next time.
-            raise Unavailable("Pirate Face unreachable") from e
-        if magnet is api.NOT_LISTED:
-            ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
-            _handles[repo_id] = None
-            return None
-        if magnet is api.LICENSE_REQUIRED:
-            raise Unavailable(f"accept the license terms at {config.API}/{repo_id}")
-        if not magnet:
-            ui.not_on_pirateface(repo_id)
-            _handles[repo_id] = None
-            return None
-        atp = lt.parse_magnet_uri(magnet)
-        atp.save_path = str(CACHE_DIR)
-        atp.flags |= lt.torrent_flags.default_dont_download
-        # Cache the file list: a magnet alone needs a live peer to get it.
-        saved = CACHE_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
-        if not saved.exists():
-            _save_torrent_file(repo_id, saved, str(atp.info_hashes.v1))
-        if saved.exists():
-            atp.ti = lt.torrent_info(str(saved))
-        if resume:
-            ra = lt.read_resume_data(resume)
-            atp.have_pieces = ra.have_pieces
-            atp.verified_pieces = ra.verified_pieces
-            atp.unfinished_pieces = ra.unfinished_pieces
-        h = _get_session().add_torrent(atp)
-        deadline = time.monotonic() + config.METADATA_TIMEOUT
-        while not h.status().has_metadata:
-            if time.monotonic() > deadline:
-                _get_session().remove_torrent(h)
-                _handles[repo_id] = None
-                raise TimeoutError("no peer sent the file list in time")
-            time.sleep(0.2)
-        if not saved.exists():
-            saved.parent.mkdir(parents=True, exist_ok=True)
-            saved.write_bytes(lt.bencode({"info": lt.bdecode(h.torrent_file().info_section())}))
-        _handles[repo_id] = h
-        threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
-        fs = h.torrent_file().files()
-        real = [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
-        ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real))
-        return h
+        return _handles.get(repo_id, _NOT_CACHED)
+
+
+def _remember(repo_id, handle):
+    """Remember the repo's handle, or None for "not on Pirate Face", under _lock."""
+    with _lock:
+        _handles[repo_id] = handle
+
+
+def _lookup_magnet(repo_id):
+    """The repo's magnet, or None to fall back on Hugging Face. A None is remembered so the site is
+    asked once per process; an unreachable site raises instead, so it is retried next time."""
+    try:
+        magnet = api.lookup_magnet(repo_id)
+    except api.Unreachable as e:
+        # Don't cache this as "not on Pirate Face": the site may be back next time.
+        raise Unavailable("Pirate Face unreachable") from e
+    if magnet is api.NOT_LISTED:
+        ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
+        _remember(repo_id, None)
+        return None
+    if magnet is api.LICENSE_REQUIRED:
+        raise Unavailable(f"accept the license terms at {config.API}/{repo_id}")
+    if not magnet:
+        ui.not_on_pirateface(repo_id)
+        _remember(repo_id, None)
+        return None
+    return magnet
+
+
+def _torrent_params(repo_id, magnet, resume):
+    """(params, saved): add_torrent params with the cached file list and any resume data folded in, and
+    the .torrent path the file list is cached to (a magnet alone needs a live peer to get it)."""
+    atp = lt.parse_magnet_uri(magnet)
+    atp.save_path = str(CACHE_DIR)
+    atp.flags |= lt.torrent_flags.default_dont_download
+    saved = CACHE_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
+    if not saved.exists():
+        _save_torrent_file(repo_id, saved, str(atp.info_hashes.v1))
+    if saved.exists():
+        atp.ti = lt.torrent_info(str(saved))
+    if resume:
+        ra = lt.read_resume_data(resume)
+        atp.have_pieces = ra.have_pieces
+        atp.verified_pieces = ra.verified_pieces
+        atp.unfinished_pieces = ra.unfinished_pieces
+    return atp, saved
+
+
+def _wait_for_metadata(repo_id, h):
+    """Block until the torrent has its file list, or forget the repo and time out."""
+    deadline = time.monotonic() + config.METADATA_TIMEOUT
+    while not h.status().has_metadata:
+        if time.monotonic() > deadline:
+            _get_session().remove_torrent(h)
+            _remember(repo_id, None)
+            raise TimeoutError("no peer sent the file list in time")
+        time.sleep(0.2)
+
+
+def _cache_file_list(saved, h):
+    """Save the file list a peer sent, so a magnet alone needs a live peer only the first time."""
+    if not saved.exists():
+        saved.parent.mkdir(parents=True, exist_ok=True)
+        saved.write_bytes(lt.bencode({"info": lt.bdecode(h.torrent_file().info_section())}))
+
+
+def _handle(repo_id, resume=None):
+    """The repo's handle, adding the torrent the first time. Callers hold the repo's _setup_lock, so only the
+    shared dicts need _lock: the site lookup and the metadata wait run without it, so one repo waiting for its
+    file list doesn't hold up every other repo's downloads and status lines."""
+    cached = _remembered(repo_id)
+    if cached is not _NOT_CACHED:
+        return cached
+    magnet = _lookup_magnet(repo_id)
+    if magnet is None:
+        return None
+    atp, saved = _torrent_params(repo_id, magnet, resume)
+    h = _get_session().add_torrent(atp)
+    _wait_for_metadata(repo_id, h)
+    _cache_file_list(saved, h)
+    _remember(repo_id, h)
+    threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
+    fs = h.torrent_file().files()
+    real = [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
+    ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real))
+    return h
 
 
 def _save_torrent_file(repo_id, saved, infohash):
@@ -181,7 +223,15 @@ def _save_torrent_file(repo_id, saved, infohash):
         data = api.torrent_file(repo_id)
     except api.Unreachable:
         return  # the magnet still works; file list can come from peers
-    if data and str(lt.torrent_info(data).info_hashes().v1) == infohash:
+    if not data:
+        return
+    try:
+        ti = lt.torrent_info(data)
+    except RuntimeError:
+        # A .torrent the site sent that libtorrent can't parse shouldn't take the repo off the
+        # swarm: the magnet still works and the file list can come from peers.
+        return
+    if str(ti.info_hashes().v1) == infohash:
         saved.parent.mkdir(parents=True, exist_ok=True)
         saved.write_bytes(data)
 

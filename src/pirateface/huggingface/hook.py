@@ -4,7 +4,6 @@ import contextvars
 import functools
 import hashlib
 import inspect
-import shutil
 import sys
 from pathlib import Path
 
@@ -84,34 +83,34 @@ def _from_torrent(filename, etag, dest):
     except api.Unreachable as e:
         raise torrent.Unavailable("Pirate Face unreachable") from e
     src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else config.STALL_TIMEOUT)
-    if not _matches(src, etag):
+    if not _place_checked(src, dest, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
-    _place(src, dest)
     ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if pf_only else "Hugging Face")
     return True
 
 
-def _matches(path, etag):
-    """HF etags are SHA-256 for LFS files, git blob SHA-1 otherwise."""
+def _place_checked(src, dest, etag):
+    """Copy src to dest, hashing it on the way, and move it into place only if the fingerprint matches:
+    one read of the file instead of one to check and one to copy. HF etags are SHA-256 for LFS files, git blob
+    SHA-1 otherwise. Copy, not hard-link: HF makes its blobs read-only, which would lock libtorrent out of a
+    shared inode."""
     etag = (etag or "").removeprefix("W/").strip('"')
     if len(etag) == 64:
         h = hashlib.sha256()
     elif len(etag) == 40:
-        h = hashlib.sha1(b"blob %d\0" % path.stat().st_size)
+        h = hashlib.sha1(b"blob %d\0" % src.stat().st_size)
     else:
         return False
-    with path.open("rb") as f:
-        while chunk := f.read(1 << 20):
-            h.update(chunk)
-    return h.hexdigest() == etag
-
-
-def _place(src, dest):
-    """Copy, not hard-link: HF makes its blobs read-only, which would lock libtorrent out of a shared inode."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".pf.incomplete")
     try:
-        shutil.copyfile(src, tmp)
+        with src.open("rb") as f, tmp.open("wb") as out:
+            while chunk := f.read(1 << 20):
+                h.update(chunk)
+                out.write(chunk)
+        if h.hexdigest() != etag:
+            return False
         tmp.replace(dest)
+        return True
     finally:
         tmp.unlink(missing_ok=True)

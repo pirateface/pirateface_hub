@@ -33,32 +33,36 @@ def _wrap(http):
             self.inner, self.host = inner, urllib.parse.urlsplit(constants.ENDPOINT).hostname
 
         def handle_request(self, request):
-            path = urllib.parse.unquote(request.url.path) if request.url.host == self.host else ""
-            if path and (answered := self._answer(request, path, PF_NAMESPACE)):
+            raw_path = request.url.path if request.url.host == self.host else ""
+            if raw_path and (answered := self._answer(request, raw_path, PF_NAMESPACE)):
                 return answered
             response = self.inner.handle_request(request)
             # Hugging Face says "repository not found" as a 401 (no token) or 404 RepositoryNotFound (with one).
             missing = response.status_code == 401 or response.headers.get("X-Error-Code") == "RepositoryNotFound"
-            if path and missing and (answered := self._answer(request, path)):
+            if raw_path and missing and (answered := self._answer(request, raw_path)):
                 response.close()
                 return answered
             return response
 
-        def _answer(self, request, path, namespace=None):
+        def _answer(self, request, raw_path, namespace=None):
             for pattern, answer in (
                 (TREE, responses.tree),
                 (INFO, responses.info),
                 (RESOLVE, responses.resolve),
             ):
-                m = pattern.fullmatch(path)
+                m = pattern.fullmatch(raw_path)
                 if not m or (namespace is not None and m[1].split("/")[0].lower() != namespace):
                     continue
+                # Match on the raw path so a / inside a revision (refs/pr/1 arrives as refs%2Fpr%2F1) stays
+                # one segment, then unquote the captures.
+                repo = urllib.parse.unquote(m[1])
+                rest = (urllib.parse.unquote(g) if g else g for g in m.groups()[1:])
                 try:
-                    found = api.pf_only(m[1])
+                    found = api.pf_only(repo)
                 except api.Unreachable:
                     continue
                 if found:
-                    status, headers, body = answer(found, request.method, *m.groups()[1:])
+                    status, headers, body = answer(found, request.method, *rest)
                     if body is None:
                         return httpx2.Response(status, headers=headers, request=request)
                     return httpx2.Response(status, headers=headers, json=body, request=request)
