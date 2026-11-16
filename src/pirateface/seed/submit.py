@@ -21,9 +21,10 @@ COMMIT = re.compile(r"[0-9a-fA-F]{40}")
 UPGRADE = "uvx -p 3.13 --from pirateface@latest pf ..., or pipx upgrade pirateface, or pip install -U pirateface"
 
 
-def start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait):
+def start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait, per_file=False):
     print("\n==> Start seeding")
-    done = clients.add(data, save_dir, v1)
+    # Per-file swarms live in qBittorrent, which can only skip their check when it holds the model too.
+    done = clients.add(data, save_dir, v1, prefer=clients.QBittorrent if per_file else None)
     if done:
         print(f"    {done}")
     elif user.YES:
@@ -217,7 +218,8 @@ def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path):
             print(f"Then run `pf seed {repo} {src}` to seed the listed torrent with these files.")
             return
     elif code == 401:
-        user.KEY_FILE.unlink(missing_ok=True)
+        if not os.environ.get("PIRATEFACE_KEY"):
+            user.KEY_FILE.unlink(missing_ok=True)  # an env-var key may not be the one saved on disk
         raise SeedError(f"key rejected. Get a new one at {API}/account and rerun")
     elif code == 429:
         raise user.RateLimited(str(result))
@@ -276,7 +278,7 @@ def submit_new(
         return
 
     # Seed first: a listed magnet is only useful if someone is sharing the files.
-    start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True)
+    start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True, per_file=per_file)
     confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path)
     if per_file:
         seed_model(data, save_dir, v1, verified=True)  # build_torrent just hashed every file

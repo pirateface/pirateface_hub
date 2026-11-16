@@ -133,10 +133,15 @@ def pf_only(repo_id):
 def file_root(root):
     """One file's own swarm, by BEP 52 pieces root (GET /api/files/<root>): name, infohashV2, siblings
     (the listed uploads holding it) and the path of its .torrent. None if not listed or unreachable."""
+    if time.monotonic() < _down_until:
+        return None
     try:
         with urllib.request.urlopen(f"{API}/api/files/{root}", timeout=15) as r:
             return json.load(r)
+    except urllib.error.HTTPError:
+        return None  # an answer about this file (404: not listed)
     except Exception:
+        _mark_down()  # no answer: the next lookups fail fast for UNREACHABLE_FOR, as lookup() does
         return None
 
 

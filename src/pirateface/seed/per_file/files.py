@@ -18,6 +18,8 @@ def local_files(data, save_dir):
     fs = ti.files()
     found = []
     for i in range(fs.num_files()):
+        if fs.file_flags(i) & fs.flag_pad_file:
+            continue  # BEP 47 padding: zeros, with no pieces root of its own
         path, size = Path(save_dir, fs.file_path(i)), fs.file_size(i)
         if size >= MIN_SIZE and path.is_file() and path.stat().st_size == size:
             found.append((path, str(fs.root(i))))

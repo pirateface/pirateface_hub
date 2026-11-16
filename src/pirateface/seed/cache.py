@@ -44,12 +44,14 @@ def plan_cache():
             continue
         # A GGUF repo holds many quants: one quant here is complete when every shard of it is.
         gguf = [p for p in remote if p.endswith(".gguf") and (snap / p).exists()]
-        missing = sum(
-            not (snap / SHARD.sub(f"-{i:05d}-of-{m[1]}.gguf", p)).exists()
+        # Each shard once: every present shard of a quant names the same siblings.
+        shards = {
+            SHARD.sub(f"-{i:05d}-of-{m[1]}.gguf", p)
             for p in gguf
             if (m := SHARD.search(p))
             for i in range(1, int(m[1]) + 1)
-        )
+        }
+        missing = sum(not (snap / shard).exists() for shard in shards)
         bad = 0
         for p, (want, is_lfs) in remote.items():
             local = snap / p

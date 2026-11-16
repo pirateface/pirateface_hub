@@ -71,7 +71,7 @@ def seed_listed(repo, src, key, per_file=False):
     torrent_path.write_bytes(data)
     rest = "" if have == len(paths) else "; the client downloads the rest"
     print(f"==> {repo} is on Pirate Face. You have {have} of its {len(paths)} files{rest}.")
-    submit.start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=False)
+    submit.start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=False, per_file=per_file)
     if per_file:
         seed_model(data, save_dir, v1)
 
