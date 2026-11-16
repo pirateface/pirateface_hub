@@ -29,10 +29,11 @@ def _remove(qbt, entry):
     qbt.call("torrents/delete", {"hashes": entry["hash"], "deleteFiles": "false"})
 
 
-def listed_v1(repo):
-    """(.torrent bytes, name, v1 infohash) of the repo's listed v1-only torrent, or None if it is already hybrid."""
+def listed_v1(repo, infohash=None):
+    """(.torrent bytes, name, v1 infohash) of the repo's listed v1-only torrent (or the one with that infohash, which
+    the site redirects to its hybrid once upgraded), or None if it is already hybrid."""
     try:
-        old = api.torrent_file(repo)
+        old = api.download(f"/api/torrents/{infohash}.torrent") if infohash else api.torrent_file(repo)
     except api.Unreachable as e:
         raise SeedError(f"could not reach {API}") from e
     if not old:
@@ -80,16 +81,15 @@ def send_upgrade(key, v1, data, manifest):
 
 
 def rebuild(repo):
-    """Relist your v1 torrent of repo as hybrid, from the copy qBittorrent seeds, and seed it. (one model)"""
     key = user.load_key()
     qbt = _qbittorrent()
     upgrade_one(qbt, key, repo)
 
 
-def upgrade_one(qbt, key, repo):
-    """Upgrade repo's listed v1 torrent. Returns "upgraded" or "already" (its .torrent is hybrid now);
-    raises SeedError when it cannot be upgraded."""
-    listed = listed_v1(repo)
+def upgrade_one(qbt, key, repo, infohash=None):
+    """Upgrade repo's listed v1 torrent (or the one with that infohash). Returns "upgraded" or "already" (its .torrent
+    is hybrid now); raises SeedError when it cannot be upgraded."""
+    listed = listed_v1(repo, infohash)
     if not listed:
         return "already"
     old, name, v1 = listed
@@ -119,13 +119,13 @@ def upgrade_mine():
     if not mine:
         print("    You have no listed v1-only torrents to upgrade.")
         return
-    print(f"==> Upgrading your {len(mine)} listed v1 torrents that have a complete copy in qBittorrent")
+    print(f"==> Upgrading your {len(mine)} listed v1 torrents")
     done = already = 0
     problems = []
     for row in mine:
         repo = row["repo"]
         try:
-            state = upgrade_one(qbt, key, repo)
+            state = upgrade_one(qbt, key, repo, row["infohash"])
         except SeedError as e:
             problems.append(f"{repo}: {e}")
         else:
