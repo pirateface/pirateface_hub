@@ -82,7 +82,6 @@ def _from_torrent(filename, etag, dest):
     try:
         pf_only = api.pf_only(repo_id) is not None
     except api.Unreachable as e:
-        # The cached-index fallback will hook in here (follow-up); today Hugging Face gets the file.
         raise torrent.Unavailable("Pirate Face unreachable") from e
     src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else config.STALL_TIMEOUT)
     if not _matches(src, etag):

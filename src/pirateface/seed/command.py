@@ -85,6 +85,8 @@ def seed(repo, folder=None, revision=None, per_file=False):
     entry = api.lookup_soft(repo)
     if entry is None:
         raise SeedError(f"could not reach {API}")
+    if entry is api.LICENSE_REQUIRED:
+        raise SeedError(f"accept the license terms at {API}/{repo}")
     if entry is api.NOT_LISTED:
         src = Path(folder) if folder else local_copy(repo, revision, download=True)
         submit.submit_new(repo, src, revision or (None if folder else src.name), key, per_file=per_file)

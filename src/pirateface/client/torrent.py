@@ -137,6 +137,8 @@ def _handle(repo_id, resume=None):
             ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
             _handles[repo_id] = None
             return None
+        if magnet is api.LICENSE_REQUIRED:
+            raise Unavailable(f"accept the license terms at {config.API}/{repo_id}")
         if not magnet:
             ui.not_on_pirateface(repo_id)
             _handles[repo_id] = None

@@ -16,6 +16,7 @@ from importlib.metadata import version
 from pirateface.config import API, flag
 
 NOT_LISTED = object()
+LICENSE_REQUIRED = object()
 
 # One dead lookup per half-minute, not one per file: an outage costs 10s once, then fails fast.
 UNREACHABLE_FOR = 30.0
@@ -33,7 +34,7 @@ def _mark_down():
 
 @functools.cache
 def lookup(repo_id, quant=None):
-    """Pirate Face's entry for the repo, NOT_LISTED, or None if unknown (license terms to accept).
+    """Pirate Face's entry for the repo, NOT_LISTED, LICENSE_REQUIRED, or None for an answer we cannot use.
 
     Raises Unreachable when the site cannot be reached at all, so callers can tell an outage
     from a 404 instead of treating both as "not on Pirate Face".
@@ -49,6 +50,8 @@ def lookup(repo_id, quant=None):
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return NOT_LISTED
+        if e.code in (401, 403):
+            return LICENSE_REQUIRED
         if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
             # Rate limiting, a timeout, a redirect loop or a CDN/reverse proxy saying 5xx is an
             # outage, not a licensing answer.
@@ -68,7 +71,8 @@ def lookup(repo_id, quant=None):
 
 
 def lookup_soft(repo_id):
-    """lookup(), with an unreachable site reported as None for callers that print their own message."""
+    """lookup(), with an unreachable site reported as None. Other answers (including the licence
+    sentinel) pass through, so callers that print their own message can still tell them apart."""
     try:
         return lookup(repo_id)
     except Unreachable:
@@ -76,7 +80,7 @@ def lookup_soft(repo_id):
 
 
 def lookup_magnet(repo_id):
-    """The magnet, NOT_LISTED, or None if unknown (network error, or license terms to accept first)."""
+    """The magnet, NOT_LISTED, LICENSE_REQUIRED, or None for an answer we cannot use."""
     entry = lookup(repo_id)
     return entry.get("magnet") if isinstance(entry, dict) else entry
 
@@ -91,9 +95,13 @@ def torrent_file(repo_id, quant=None):
     try:
         with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
             return r.read()
-    except urllib.error.HTTPError:
-        # 403/404/410/429 are answers about this torrent, not an outage: keep the "no .torrent"
-        # answer (pf_only() relies on it) instead of latching every repo down for 30s.
+    except urllib.error.HTTPError as e:
+        if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
+            # Don't cache a rate-limit blip as "no .torrent": the same latch lookup() uses.
+            _mark_down()
+            raise Unreachable(f"could not reach {API}") from e
+        # 403/404/410 and friends are answers about this torrent; keep the "no .torrent" answer
+        # that pf_only() relies on.
         return None
     except urllib.error.URLError as e:
         if isinstance(e.reason, ssl.SSLError):
