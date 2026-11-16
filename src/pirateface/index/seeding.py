@@ -2,20 +2,10 @@
 every earlier shard byte for byte, so the newest build added over an older build's folder only downloads the new
 shards. The older builds stay in the client and keep seeding."""
 
-import re
-
 from pirateface.client import api
 from pirateface.config import API
+from pirateface.index import INDEX_REPO, NAME, is_build
 from pirateface.seed import clients, package
-
-INDEX_REPO = "pirateface/magnet-index"
-NAME = "magnet-index"  # the torrent name of every build
-FILE = re.compile(r"LICENSE|shards/(removed-)?\d{4}-\d{2}-\d{2}\.txt")
-
-
-def is_build(urls, paths):
-    """Whether a torrent called NAME is a magnet index build: Pirate Face trackers, only the license and shards."""
-    return clients.is_pirateface(urls) and bool(paths) and all(FILE.fullmatch(p) for p in paths)
 
 
 def add_newest(mine):
