@@ -17,6 +17,10 @@ HELP = (
 )
 
 
+class LoginRefused(Exception):
+    """The client answered but wouldn't let us in: worth telling the user, unlike a client that isn't running."""
+
+
 class Transmission:
     name = "Transmission"
 
@@ -40,6 +44,8 @@ class Transmission:
                     raise RuntimeError(out.get("result"))
                 return out["arguments"]
             except urllib.error.HTTPError as e:
+                if e.code == 401:
+                    raise LoginRefused("Transmission refused the login: check TR_AUTH (user:pass)") from e
                 if e.code != 409:
                     raise
                 self.headers["X-Transmission-Session-Id"] = e.headers["X-Transmission-Session-Id"]
@@ -105,7 +111,13 @@ class QBittorrent:
         # No login needed when "Bypass authentication for clients on localhost" is on.
         if os.environ.get("QBT_USER"):
             self.call("auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")})
-        self.call("app/version")
+        try:
+            self.call("app/version")
+        except urllib.error.HTTPError as e:
+            # Whatever auth/login answers, a 403 on any API call means we are not authorized.
+            if e.code == 403:
+                raise LoginRefused("qBittorrent refused the login: check QBT_USER and QBT_PASS") from e
+            raise
 
     def call(self, path, form=None, body=None, content_type=None, text=True):
         if form is not None:
@@ -216,16 +228,24 @@ def is_pirateface(urls):
 
 def running():
     """The clients that answer."""
-    found = []
-    for client in (Transmission, QBittorrent):
-        with contextlib.suppress(Exception):
-            found.append(client())
-    return found
+    return [c for c in map(_connect, (Transmission, QBittorrent)) if c]
 
 
-def add(data, save_dir, v1):
-    """Add the torrent to the first client that answers. Returns what happened, or None if none could."""
-    for client in running():
+def _connect(client):
+    """The client, or None if it isn't running. A client that refuses our login says so."""
+    try:
+        return client()
+    except LoginRefused as e:
+        print(f"    {e}")
+        return None
+    except Exception:  # not running, or remote access off
+        return None
+
+
+def add(data, save_dir, v1, prefer=None):
+    """Add the torrent to the first client that answers, trying a running client of class prefer first.
+    Returns what happened, or None if none could."""
+    for client in sorted(running(), key=lambda c: not (prefer and isinstance(c, prefer))):
         with contextlib.suppress(Exception):
             if client.has(v1):
                 return f"Already in {client.name}."

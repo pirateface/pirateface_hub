@@ -34,6 +34,9 @@ def link(target, dest):
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         dest.symlink_to(target)
+    except FileExistsError:
+        # dest already holds an entry (a symlink, or a real file). Not a rights problem.
+        raise LinkError(f"{dest} already exists; remove it and rerun") from None
     except OSError:
         try:
             dest.hardlink_to(target)
@@ -76,8 +79,15 @@ def clear_links(dest):
 def stage(src, dest):
     """Link the model files in src into dest. Returns (included paths, skipped paths)."""
     clear_links(dest)
-    included, skipped = [], []
-    for d, _, names in os.walk(src, followlinks=True):
+    included, skipped, seen = [], [], set()
+    for d, dirs, names in os.walk(src, followlinks=True):
+        # Links are followed (the HF cache is links), but a folder reached twice, as through a link back up
+        # the tree, is listed once: a loop would otherwise pack the model into the torrent many times.
+        real = Path(d).resolve()
+        if real in seen:
+            dirs.clear()
+            continue
+        seen.add(real)
         for n in names:
             rel = Path(d, n).relative_to(src).as_posix()
             (skipped if SKIP.search(rel) else included).append(rel)
