@@ -205,10 +205,10 @@ def older(a, b):
     return _release(a) < _release(b)
 
 
-def submit(key, body):
+def submit(key, body, path="/api/community-torrents"):
     """POST a community torrent. Returns (HTTP status, JSON answer)."""
     req = urllib.request.Request(
-        f"{API}/api/community-torrents",
+        f"{API}{path}",
         data=json.dumps(body).encode(),
         headers={
             "Authorization": f"Bearer {key}",
@@ -225,6 +225,20 @@ def submit(key, body):
             return e.code, json.load(e)
         except Exception:
             return e.code, {"error": e.reason}
+
+
+def upgrade(key, body):
+    """POST a hybrid rebuild of a v1-only torrent ({from, torrent, manifest}). Returns (HTTP status, JSON answer)."""
+    return submit(key, body, "/api/torrents/upgrade")
+
+
+def torrent_status(infohash):
+    """Pirate Face's record of a torrent by v1 infohash ({infohash, repo, status, supersededBy}), or None."""
+    try:
+        with urllib.request.urlopen(f"{API}/api/torrents/{infohash}", timeout=15) as r:
+            return json.load(r)
+    except Exception:
+        return None
 
 
 def restore(key, data):

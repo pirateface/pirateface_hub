@@ -61,6 +61,12 @@ def _main():
         help="add per-file swarms for the models you already seed in qBittorrent (no download, no submit)",
     )
     s.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="with a repo: relist your v1 torrent of it as hybrid (v1 + v2) so its files get per-file swarms; "
+        "without: switch torrents Pirate Face replaced to their replacement (qBittorrent)",
+    )
+    s.add_argument(
         "--per-file",
         action=argparse.BooleanOptionalAction,
         default=True,

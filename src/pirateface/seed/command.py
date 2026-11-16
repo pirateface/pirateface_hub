@@ -9,7 +9,7 @@ from pathlib import Path
 from pirateface.client import api, torrent
 from pirateface.config import API, SEEDS
 from pirateface.index import seeding as index_seeding
-from pirateface.seed import clients, package, submit, user
+from pirateface.seed import clients, package, submit, upgrade, user
 from pirateface.seed.per_file.command import seed_model, update_all
 from pirateface.seed.user import SeedError
 
@@ -123,6 +123,11 @@ def run(args):
             update_trackers()
         elif args.update_per_file:
             update_all()
+        elif args.upgrade:
+            if args.repo_id:
+                upgrade.rebuild(args.repo_id)
+            else:
+                upgrade.switch_all()
         elif args.hf_cache:
             from pirateface.seed import cache  # imports this module for seed_listed
 
@@ -130,7 +135,7 @@ def run(args):
         elif args.repo_id:
             seed(args.repo_id, args.folder, args.revision, args.per_file)
         else:
-            raise SeedError("give a repo (author/model), --hf-cache, --update-trackers or --update-per-file")
+            raise SeedError("give a repo (author/model), --hf-cache, --update-trackers, --update-per-file or --upgrade")
     except user.RateLimited as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(75)  # same code as package.sh, so scripts that loop over models can stop
