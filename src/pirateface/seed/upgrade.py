@@ -38,7 +38,7 @@ def rebuild(repo):
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use. See {API}/{repo}")
     name, v1, v2, single = package.info(old)
     if v2:
-        print(f"==> {repo} is already hybrid. Seed it with: pf seed {repo}")
+        print(f"==> {repo} is already hybrid. If you still seed its v1 torrent, switch with: pf seed --upgrade")
         return
     if single:
         raise SeedError("this is a single-file torrent: its file already has one swarm")
@@ -70,7 +70,8 @@ def rebuild(repo):
         raise SeedError(f"Pirate Face did not take the upgrade (HTTP {code}): {answer.get('error') or answer}")
 
     print(f"    Listed in place of the v1 torrent: {API}/{repo}")
-    qbt.add(data, entry["save_path"], skip_checking=True)  # every byte was just hashed
+    if not qbt.has(new_v1):  # a rerun after the site took it
+        qbt.add(data, entry["save_path"], skip_checking=True)  # every byte was just hashed
     _remove(qbt, entry)
     print(f"    Seeding the hybrid ({new_v1}) from the same files; the v1 torrent is out of qBittorrent.")
     print("    Seeders of the old torrent get told to switch: pf seed --upgrade")
