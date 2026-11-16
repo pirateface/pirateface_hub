@@ -3,6 +3,7 @@
 import sys
 import time
 
+from pirateface import ui
 from pirateface.client import api
 from pirateface.config import API
 from pirateface.seed import user
@@ -33,7 +34,14 @@ def _work_once(key, trackers, name, max_bytes=None):
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     total = sum(f["size"] for f in job["files"])
-    print(f"==> Leased {job['repoId']} at {job['revision'][:12]}: {len(job['files'])} files, {total / 1e9:.2f} GB")
+    ui.aligned(
+        [
+            ("leased", job["repoId"]),
+            ("revision", job["revision"][:12]),
+            ("files", str(len(job["files"]))),
+            ("size", f"{total / 1e9:.2f} GB"),
+        ]
+    )
     # A failed build raises. The failed job's row stays leased to this account until it lapses, so the
     # next lease call gets a different job; the request then goes back to the queue.
     data, manifest, infohash = build.build(job, key, trackers, name)
@@ -47,7 +55,7 @@ def _work_once(key, trackers, name, max_bytes=None):
         if (answer or {}).get("status") == "already_listed":
             print(f"    Already listed: {API}/{job['repoId']} ({answer.get('infohash', '')})")
         else:
-            print(f"    Listed: {API}/{job['repoId']} ({infohash})")
+            ui.aligned([("listed", f"{API}/{job['repoId']}"), ("infohash", infohash)])
         return True
     print(f"    Not listed ({status}): {(answer or {}).get('error', 'request failed')}")
     return False

@@ -8,31 +8,28 @@ from pirateface.config import flag
 
 QUIET = flag("PF_QUIET")
 
-
-def ansi(stream=sys.stdout):
-    """Escape codes only on a terminal that shows them: not piped, not NO_COLOR, and on Windows only
-    in Windows Terminal (the classic console prints them as text)."""
-    return stream.isatty() and "NO_COLOR" not in os.environ and (os.name != "nt" or "WT_SESSION" in os.environ)
-
-
-_color = ansi(sys.stderr)
 _lock = threading.Lock()
 _announced = set()
-
-SPLASH = r'''
-          _.-""""-._
-     __.-'   (xx)   '-.__
-    '-.________________.-'
-      /                \
-     |   ^      (###)===|
-      \    \______/    /
-       '-.__________.-'
-'''[1:].splitlines()
-TAGLINE = ("pirateface", "  Open-weight model downloads, from the swarm")
+_download_counts = {"swarm": 0, "hf": 0}
 
 
-def _c(code, text):
-    return f"\033[{code}m{text}\033[0m" if _color else text
+def ansi(stream=sys.stdout):
+    """Escape codes only on a terminal that shows them: not piped, not NO_COLOR, not TERM=dumb,
+    and on Windows only in Windows Terminal (the classic console prints them as text)."""
+    return (
+        stream.isatty()
+        and "NO_COLOR" not in os.environ
+        and os.environ.get("TERM") != "dumb"
+        and (os.name != "nt" or "WT_SESSION" in os.environ)
+    )
+
+
+def _dim(text, stream):
+    return f"\033[2m{text}\033[0m" if ansi(stream) else text
+
+
+def _bold(text, stream):
+    return f"\033[1m{text}\033[0m" if ansi(stream) else text
 
 
 def _print(line):
@@ -40,8 +37,37 @@ def _print(line):
         tqdm.write(line, file=sys.stderr)
 
 
-def _bar():
-    return _c("35", "┃")
+def _emit(line, stream):
+    if stream is sys.stderr:
+        _print(line)
+    else:
+        print(line, file=stream)
+
+
+def note(label, text, stream=sys.stderr):
+    """One fact. The label is dim; the text is plain."""
+    _emit(_dim(f"{label:<8}", stream) + text, stream)
+
+
+def aligned(rows, stream=sys.stdout, width=None):
+    """rows: (label, value). One line per fact, labels aligned. Short layer names are bold."""
+    rows = [(str(label), value) for label, value in rows if value is not None]
+    if not rows:
+        return
+    width = width or max(len(label) for label, _ in rows)
+    for label, value in rows:
+        shown = _bold(value, stream) if value in ("hybrid v1+v2", "v1 only") else value
+        _emit(f"    {_dim(f'{label:<{width}}', stream)}  {shown}", stream)
+
+
+def layer_block(rows, nxt=None):
+    """The seeding layers, then the one command that fills a layer still missing."""
+    rows = list(rows)
+    if nxt:
+        rows.append(("next", nxt))
+    if rows:
+        print()
+        aligned(rows)
 
 
 def mb(n):
@@ -50,26 +76,12 @@ def mb(n):
     return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} kB"
 
 
-def splash():
-    if _announced or not sys.stderr.isatty():
-        return
-    pad = " " * ((len("".join(TAGLINE)) - max(map(len, SPLASH))) // 2)
-    art = [pad + (_c("1", line) if i < 3 else _c("33", line)) for i, line in enumerate(SPLASH)]
-    _print("\n".join(art) + "\n" + _c("1;35", TAGLINE[0]) + _c("2", TAGLINE[1]) + "\n")
-
-
 def banner(repo_id, files, size):
     with _lock:
         if repo_id in _announced:
             return
-        splash()
         _announced.add(repo_id)
-    _print(
-        _bar()
-        + " "
-        + _c("1;35", "🏴‍☠️ pirateface")
-        + f"  {repo_id} is on Pirate Face ({files} files, {mb(size)}), downloading from the swarm"
-    )
+    note("swarm", f"{repo_id}  {files} files, {mb(size)}")
 
 
 def not_on_pirateface(repo_id, rescue_requested=False):
@@ -77,10 +89,10 @@ def not_on_pirateface(repo_id, rescue_requested=False):
         if repo_id in _announced:
             return
         _announced.add(repo_id)
-    line = _bar() + " " + _c("1;35", "🏴‍☠️ pirateface") + f"  {repo_id} isn't on Pirate Face yet, using Hugging Face"
+    line = f"{repo_id}  isn't on Pirate Face yet, using Hugging Face"
     if rescue_requested:
-        line += _c("2", " · requested a rescue (turn off: PF_NO_RESCUE=1)")
-    _print(line)
+        line += "  · requested a rescue (turn off: PF_NO_RESCUE=1)"
+    note("hf", line)
 
 
 def repo_progress(repo_id):
@@ -89,9 +101,9 @@ def repo_progress(repo_id):
         leave=False,
         file=sys.stderr,
         disable=QUIET or not sys.stderr.isatty(),
-        desc=f"{_bar()}  🏴‍☠️ {repo_id}",
+        desc=repo_id,
         bar_format="{desc}  {bar:20}",
-        colour="magenta",
+        ascii=not ansi(sys.stderr),
     )
 
 
@@ -112,11 +124,26 @@ def sources_label(webseed, peers):
 
 
 def from_swarm(filename, size, checked_by="Hugging Face"):
-    _print(
-        f"{_bar()}  {_c('32', '✔')} {filename}  {_c('2', mb(size) + ' from the swarm, fingerprint matches ' + checked_by)}"
-    )
+    with _lock:
+        _download_counts["swarm"] += 1
+    note("file", f"{filename}  {mb(size)}  fingerprint matches {checked_by}")
 
 
 def from_hf(filename, reason=None):
     if reason:
-        _print(f"{_bar()}  {_c('33', '↩')} {filename}  {_c('2', 'from Hugging Face (' + reason + ')')}")
+        with _lock:
+            _download_counts["hf"] += 1
+        note("hf", f"{filename}  from Hugging Face ({reason})")
+
+
+def download_summary():
+    """How many files came from the swarm and how many fell back to Hugging Face."""
+    with _lock:
+        swarm, hf = _download_counts["swarm"], _download_counts["hf"]
+    parts = []
+    if swarm:
+        parts.append(f"{swarm} from the swarm")
+    if hf:
+        parts.append(f"{hf} from Hugging Face")
+    if parts:
+        note("files", ", ".join(parts))

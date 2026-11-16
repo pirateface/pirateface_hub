@@ -32,56 +32,73 @@ def main():
 
 
 def _main():
-    p = argparse.ArgumentParser(prog="pf")
-    sub = p.add_subparsers(dest="cmd", required=True)
-    d = sub.add_parser("download", help="download a model into the Hugging Face cache")
+    p = argparse.ArgumentParser(
+        prog="pf",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Get a model, seed it, then add the layers the swarm can use.\n"
+            "\n"
+            "  pf download org/model        swarm, then Hugging Face for the rest\n"
+            "  pf seed org/model            seed the listing, or submit it and seed\n"
+            "  pf seed --update-per-file    per-file swarms for what you already seed\n"
+            "  pf seed --upgrade org/model  v1 only becomes hybrid v1+v2\n"
+            "  pf work --once               one queued model, from Hugging Face\n"
+            "  pf restore PATH              put a .torrent back on a listing"
+        ),
+    )
+    sub = p.add_subparsers(dest="cmd", required=True, title="commands")
+    d = sub.add_parser("download", help="get a model into the Hugging Face cache")
     d.add_argument("repo_id")
     d.add_argument("--revision")
     d.add_argument("--local-dir", help="put the files in this folder instead of the Hugging Face cache")
     s = sub.add_parser(
         "seed",
-        help="share a model on Pirate Face: seed it if listed, else package, submit and seed it",
+        help="seed it on Pirate Face, or submit it and seed it",
         description="Seeds the model if Pirate Face lists it. Otherwise builds the torrent, checks it against "
         "Hugging Face, adds it to your torrent client and submits it. Files are only read, never changed or uploaded.",
     )
-    s.add_argument("repo_id", nargs="?", help="Hugging Face id, author/model")
-    s.add_argument(
+    model = s.add_argument_group("model")
+    model.add_argument("repo_id", nargs="?", help="Hugging Face id, author/model")
+    model.add_argument(
         "folder", nargs="?", help="the model's files (default: the Hugging Face cache, downloading if needed)"
     )
-    s.add_argument("--revision", help="commit the files came from (default: Hugging Face's, when the hashes match)")
-    s.add_argument(
+    model.add_argument("--revision", help="commit the files came from (default: Hugging Face's, when the hashes match)")
+    model.add_argument(
         "--hf-cache", action="store_true", help="every complete model in the Hugging Face cache, asking per model"
     )
-    s.add_argument(
-        "--update-trackers", action="store_true", help="add your seeding tracker to torrents already seeding"
-    )
-    s.add_argument(
+    per_file = s.add_argument_group("per-file layer", "a swarm per shared file, on top of the model torrent")
+    per_file.add_argument(
         "--update-per-file",
         action="store_true",
         help="add per-file swarms for the models you already seed in qBittorrent (no download, no submit)",
     )
-    s.add_argument(
-        "--upgrade",
-        action="store_true",
-        help="with a repo: relist your v1 torrent of it as hybrid (v1 + v2) so its files get per-file swarms; "
-        "without: switch torrents Pirate Face replaced to their replacement (qBittorrent)",
-    )
-    s.add_argument(
-        "--mine",
-        action="store_true",
-        help="with --upgrade: every v1 torrent you submitted that has a complete copy in qBittorrent, "
-        "not one at a time",
-    )
-    s.add_argument(
+    per_file.add_argument(
         "--per-file",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="also seed each file another upload shares (1 MiB or more) in its own swarm (qBittorrent; default on)",
     )
+    hybrid = s.add_argument_group("hybrid layer", "v1 only has no per-file swarms; hybrid is v1 and v2")
+    hybrid.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="with a repo: relist your v1 torrent of it as hybrid (v1 + v2) so its files get per-file swarms; "
+        "without: switch torrents Pirate Face replaced to their replacement (qBittorrent)",
+    )
+    hybrid.add_argument(
+        "--mine",
+        action="store_true",
+        help="with --upgrade: every v1 torrent you submitted that has a complete copy in qBittorrent, "
+        "not one at a time",
+    )
+    trackers = s.add_argument_group("trackers")
+    trackers.add_argument(
+        "--update-trackers", action="store_true", help="add your seeding tracker to torrents already seeding"
+    )
     s.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
     u = sub.add_parser(
         "submit",
-        help="package a model folder and submit it to Pirate Face (the flags of package.sh)",
+        help="package a folder and submit the listing",
         description="Builds the hybrid torrent, hashes the files, checks them against Hugging Face, adds the torrent "
         "to your torrent client, then submits it. Files are only read, never changed or uploaded.",
     )
@@ -97,7 +114,7 @@ def _main():
     u.add_argument("-y", "--yes", action="store_true", help="skip every prompt; only on the user's explicit OK")
     w = sub.add_parser(
         "work",
-        help="build torrents for queued model requests, streaming from Hugging Face (no disk space needed)",
+        help="build the next queued model, streamed from Hugging Face",
         description="Leases one queued model from Pirate Face, streams its files from Hugging Face through memory, "
         "builds the hybrid torrent and submits it. Nothing is written to disk. Loops until stopped (Ctrl-C).",
     )
@@ -117,7 +134,7 @@ def _main():
     w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(
         "restore",
-        help="restore missing .torrent metadata on Pirate Face",
+        help="put a missing .torrent back on a listing",
         description="Uploads one or more .torrent files (or a torrent client folder) to restore missing metadata on Pirate Face.",
     )
     r.add_argument(
@@ -143,6 +160,7 @@ def _main():
 
     from huggingface_hub import snapshot_download
 
+    from pirateface import ui
     from pirateface.client import api
 
     # One file at a time from the swarm; a model Pirate Face doesn't list uses huggingface_hub's default workers.
@@ -150,4 +168,6 @@ def _main():
     kwargs = {"revision": args.revision, "local_dir": args.local_dir}
     if on_pirateface:
         kwargs["max_workers"] = 1
-    print(snapshot_download(args.repo_id, **kwargs))
+    path = snapshot_download(args.repo_id, **kwargs)
+    ui.download_summary()
+    print(path)
