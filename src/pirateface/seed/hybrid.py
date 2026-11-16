@@ -94,8 +94,9 @@ def files_under(root):
     return sorted((p for p in paths if p[0] != ".pad"), key=lambda p: [s.encode() for s in p])
 
 
-def build(root, trackers, plen=None):
-    """Hybrid torrent of the folder root (its name is the torrent's name). Returns (bytes, v1 hex, v2 hex)."""
+def build(root, trackers, plen=None, sums=None):
+    """Hybrid torrent of the folder root (its name is the torrent's name). Returns (bytes, v1 hex, v2 hex).
+    sums: a dict to fill with each file's SHA-256, read in the same pass."""
     root = Path(root)
     paths = files_under(root)
     if not paths:
@@ -103,16 +104,16 @@ def build(root, trackers, plen=None):
     if plen is None:
         plen = piece_length(sum(root.joinpath(*p).stat().st_size for p in paths))
     return build_from(
-        root.absolute().name, [(p, lambda p=p: root.joinpath(*p).open("rb")) for p in paths], trackers, plen
+        root.absolute().name, [(p, lambda p=p: root.joinpath(*p).open("rb")) for p in paths], trackers, plen, sums
     )
 
 
-def build_from(name, sources, trackers, plen):
+def build_from(name, sources, trackers, plen, sums=None):
     """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (files_under sorts them).
 
     opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
     except the last must return exactly BLOCK bytes: each read is hashed as one v2 leaf. Nothing is kept,
-    so a source can be a network stream. Returns (bytes, v1 hex, v2 hex).
+    so a source can be a network stream. Returns (bytes, v1 hex, v2 hex). sums: as for build().
     """
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
@@ -120,14 +121,19 @@ def build_from(name, sources, trackers, plen):
     files, tree, layers, pad_index = [], {}, {}, 0
     for parts, opener in sources:
         size, leaves, piece_roots = 0, [], []
+        whole = hashlib.sha256() if sums is not None else None
         with opener() as f:
             while block := f.read(BLOCK):
                 size += len(block)
                 v1.add(block)
+                if whole:
+                    whole.update(block)
                 leaves.append(hashlib.sha256(block).digest())
                 if len(leaves) == per_piece:
                     piece_roots.append(_merkle(leaves, ZERO))
                     leaves = []
+        if whole:
+            sums["/".join(parts)] = whole.hexdigest()
         entry = {"length": size}
         if size > plen:
             if leaves:

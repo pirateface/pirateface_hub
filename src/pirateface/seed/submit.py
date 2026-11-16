@@ -79,10 +79,9 @@ def build_torrent(src, save_dir, name, trackers):
     if not paths:
         raise SeedError("no files left to package")
     print(f"    {len(paths)} files included, {len(skipped)} skipped")
-    print("==> Hashing (SHA-256)")
-    sums = package.checksums(save_dir / name, paths)
-    print("==> Creating torrent")
-    data, v1, v2 = package.make_torrent(save_dir, name, trackers)
+    print("==> Hashing and creating the torrent")
+    sums = {}  # SHA-256 of each file, filled by the same read that hashes the pieces
+    data, v1, v2 = package.make_torrent(save_dir, name, trackers, sums)
     return paths, sums, data, v1, v2
 
 
