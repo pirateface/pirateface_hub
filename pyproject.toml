@@ -39,7 +39,10 @@ packages = ["src/pirateface"]
 "src/pirateface.pth" = "pirateface.pth"
 
 [dependency-groups]
-dev = ["ruff>=0.6"]
+dev = [
+    "ruff>=0.6",
+    "vulture>=2.16",
+]
 
 [tool.ruff]
 line-length = 120
@@ -48,3 +51,7 @@ line-length = 120
 extend-select = ["B", "I", "UP", "SIM", "PTH", "RUF"]
 # Broad excepts are deliberate: any failure falls back to Hugging Face.
 ignore = ["BLE001"]
+
+[tool.vulture]
+paths = ["src", "vulture_whitelist.py"]
+min_confidence = 60  # vulture's lowest: every finding it can make
