@@ -221,7 +221,7 @@ def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path):
     elif code == 401:
         if not os.environ.get("PIRATEFACE_KEY"):
             user.KEY_FILE.unlink(missing_ok=True)  # an env-var key may not be the one saved on disk
-        raise SeedError(f"key rejected. Get a new one at {API}/account and rerun")
+        raise SeedError(f"key rejected. Get a new one at {API}/settings and rerun")
     elif code == 429:
         raise user.RateLimited(str(result))
     else:
