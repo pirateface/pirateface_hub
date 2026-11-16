@@ -1,5 +1,6 @@
 """Add per-file torrents to qBittorrent, each linked to a file already on disk."""
 
+import os
 from pathlib import Path
 
 from pirateface.client import api
@@ -44,9 +45,10 @@ class Adder:
     def add_file(self, entry, path, verified):
         name = entry["name"]  # from the first upload that had the file; can differ from yours
         torrent = api.download(entry["torrent"])
-        if not torrent or Path(name).name != name:
+        root = entry["root"][:16]  # from the site too: neither may lead out of the seeds folder
+        if not torrent or Path(name).name != name or package.unsafe_path(f"{root}/{name}", windows=os.name == "nt"):
             return False
-        folder = Path(SEEDS, "per-file", entry["root"][:16])
+        folder = Path(SEEDS, "per-file", root)
         (folder / name).unlink(missing_ok=True)
         package.link(path.resolve(), folder / name)
         self.qbt.add(torrent, folder, skip_checking=verified)
