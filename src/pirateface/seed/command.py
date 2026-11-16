@@ -53,6 +53,7 @@ def seed_listed(repo, src, key, per_file=False):
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
     paths = [p for p, _, _ in torrent.files_in(data)]
+    package.check_listing(data, paths)
     mine = weights(src, [str(p.relative_to(src)) for p in Path(src).rglob("*")]) if src else set()
     if mine and not weights(src, paths):
         # Another quant of this revision: seeding the listed torrent would download it instead.

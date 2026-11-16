@@ -17,7 +17,7 @@ SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|par
 
 # Names Windows can't store: reserved device names (with any extension), <>:"\\|?* and control
 # characters, and a trailing dot or space.
-WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?", re.IGNORECASE)
+WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³])(\..*)?", re.IGNORECASE)
 WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
 
 
@@ -58,17 +58,44 @@ def link(target, dest):
             ) from e
 
 
+def unsafe_path(rel):
+    """Why rel ("/"-separated) can't be written under a folder as-is, or None: a part that is empty, "." or ".."
+    or holds a backslash would leave the folder (absolute, drive and UNC forms included), and a name
+    Windows can't store fails there."""
+    for part in rel.split("/"):
+        if part in ("", ".", "..") or "\\" in part:
+            return f"{rel}: leaves its folder"
+        if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
+            return f"{rel}: not a valid file name on Windows"
+    return None
+
+
+def check_listing(data, paths):
+    """Raise LinkError if a listed torrent (paths: torrent.files_in) has a path unsafe_path refuses or a symlink
+    entry. Seeding links these paths into the seed folder and the torrent client writes them, so this runs
+    before either."""
+    files = lt.bdecode(data)[b"info"].get(b"files") or []
+    problems = [why for p in paths if (why := unsafe_path(p))]
+    problems += [
+        "/".join(p.decode(errors="replace") for p in f[b"path"]) + ": a symlink"
+        for f in files
+        if b"l" in f.get(b"attr", b"")
+    ]
+    if problems:
+        raise LinkError("Pirate Face's .torrent lists paths pf won't write:\n    " + "\n    ".join(problems[:20]))
+
+
 def unportable(paths):
     """Why these torrent paths ("/"-separated) can't be downloaded as-is everywhere, or [].
     Names that differ only in case (file or folder) would overwrite each other on Windows and macOS,
     and names Windows can't store fail there. Both are refused, not renamed: renaming changes the files."""
     problems, seen = [], {}
     for rel in paths:
+        if why := unsafe_path(rel):
+            problems.append(why)
         parts = rel.split("/")
-        for i, part in enumerate(parts):
+        for i in range(len(parts)):
             prefix = "/".join(parts[: i + 1])
-            if WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part):
-                problems.append(f"{prefix}: not a valid file name on Windows")
             if seen.setdefault(prefix.casefold(), prefix) != prefix:
                 problems.append(f"{prefix} and {seen[prefix.casefold()]}: names differ only in case")
     return list(dict.fromkeys(problems))
