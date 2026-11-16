@@ -3,7 +3,10 @@
 
 from pathlib import Path
 
+import libtorrent as lt
+
 from pirateface import ui
+from pirateface.client import api
 from pirateface.seed import clients
 from pirateface.seed.per_file.adder import Adder
 from pirateface.seed.per_file.files import MIN_SIZE, biggest_file, local_files
@@ -15,6 +18,20 @@ NOT_YET = "    Per-file swarms are not available yet."
 
 def qbittorrent():
     return next((c for c in clients.running() if isinstance(c, clients.QBittorrent)), None)
+
+
+def _load(data, v1):
+    """The .torrent's bytes libtorrent will take: data itself, or the site's stored copy of the same torrent
+    when libtorrent rejects data (as it does a qBittorrent export of a hybrid, whose piece layers it calls
+    invalid). Raises when neither is usable."""
+    try:
+        lt.torrent_info(data)
+    except (RuntimeError, ValueError):
+        data = api.download(f"/api/torrents/{v1}.torrent")
+        if data is None:
+            raise  # the site has no copy either: the caller reports the original error
+        lt.torrent_info(data)  # a stored copy libtorrent rejects raises here, before the caller
+    return data
 
 
 def _layers(model, per_file, nxt, added, skipped, report):
@@ -32,8 +49,8 @@ def seed_model(data, save_dir, v1, verified=False, label=None, report=True):
     report: print the layer block. A caller that sums several models prints one block itself."""
     print("\n==> Per-file swarms")
     try:
-        found = local_files(data, save_dir)
-    except (RuntimeError, ValueError) as exc:  # libtorrent rejects a malformed piece layer
+        found = local_files(_load(data, v1), save_dir)
+    except (RuntimeError, ValueError) as exc:  # neither this copy nor the site's for the infohash loads
         print(f"    Skipped: this torrent's metadata could not be read ({exc}).")
         return _layers(None, "skipped", None, 0, 0, report)
     if found is None:
@@ -79,7 +96,7 @@ def classify(t, qbt):
     try:
         if not clients.is_pirateface(qbt.trackers(t["hash"])):
             return None  # not a model pf seeded
-        data = qbt.export(t["hash"])
+        data = _load(qbt.export(t["hash"]), t.get("infohash_v1") or t["hash"])
         if biggest_file(data) < MIN_SIZE:
             return None  # nothing of 1 MiB or more is worth a per-file swarm
         found = local_files(data, t["save_path"])
