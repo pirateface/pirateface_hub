@@ -113,7 +113,7 @@ class QBittorrent:
             answer = self.call(
                 "auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")}
             )
-            if answer.strip() != "Ok.":  # a wrong password is a 200 "Fails.", not an HTTP error
+            if answer.strip() == "Fails.":  # a wrong password is a 200 "Fails.", not an HTTP error
                 raise LoginRefused("qBittorrent refused the login: check QBT_USER and QBT_PASS")
         self.call("app/version")
 
