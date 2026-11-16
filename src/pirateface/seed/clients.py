@@ -180,9 +180,19 @@ class QBittorrent:
 
     def ensure_announce_all(self):
         """Announce to every tracker in every tier. qBittorrent's default stops at the first tracker that
-        answers, so a keyed tracker added after the site ones would never hear from it. True if it changed."""
+        answers, so a keyed tracker added after the site ones would never hear from it. This changes a
+        qBittorrent setting for every torrent, so it asks first (-y answers yes). True if it changed."""
+        from pirateface.seed import user  # user imports this module
+
         prefs = json.loads(self.call("app/preferences"))
         if not (prefs.get("announce_to_all_trackers") and prefs.get("announce_to_all_tiers")):
+            print(
+                "    qBittorrent announces to the first tracker that answers, so your seeding tracker would not\n"
+                "    hear from it. pf can turn on Options > Advanced > Always announce to all trackers in a tier /\n"
+                "    to all tiers. This applies to every torrent in qBittorrent."
+            )
+            if not user.YES and user.ask("    Type yes to change it: ") != "yes":
+                raise user.SeedError("qBittorrent settings left unchanged")
             self.call(
                 "app/setPreferences",
                 {"json": json.dumps({"announce_to_all_trackers": True, "announce_to_all_tiers": True})},

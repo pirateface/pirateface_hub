@@ -22,9 +22,19 @@ LICENSE_REQUIRED = object()
 UNREACHABLE_FOR = 30.0
 _down_until = 0.0
 
+# The site takes .torrent uploads up to 3 MB; the copy it serves adds its trackers and web seeds.
+MAX_TORRENT_BYTES = 4_000_000
+
 
 class Unreachable(Exception):
     """pirateface.co didn't answer: distinct from "this repo isn't listed"."""
+
+
+def _read_torrent(url, timeout):
+    """The .torrent at url, or None if it is over MAX_TORRENT_BYTES."""
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        data = r.read(MAX_TORRENT_BYTES + 1)
+    return data if len(data) <= MAX_TORRENT_BYTES else None
 
 
 def _mark_down():
@@ -100,8 +110,7 @@ def torrent_file(repo_id, quant=None):
     if not path:
         return None
     try:
-        with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
-            return r.read()
+        return _read_torrent(urllib.parse.urljoin(API, path), 30)
     except urllib.error.HTTPError as e:
         if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
             # Don't cache a rate-limit blip as "no .torrent": the same latch lookup() uses.
@@ -153,10 +162,9 @@ def file_root(root):
 
 
 def download(path):
-    """Bytes of a file on the site (path as the API gives it), or None."""
+    """A .torrent on the site (path as the API gives it), or None."""
     try:
-        with urllib.request.urlopen(urllib.parse.urljoin(API, path), timeout=30) as r:
-            return r.read()
+        return _read_torrent(urllib.parse.urljoin(API, path), 30)
     except Exception:
         return None
 
