@@ -11,7 +11,7 @@ from pathlib import Path
 from pirateface import ui
 from pirateface.client import api
 from pirateface.config import API, SEEDS
-from pirateface.seed import clients, hub, package, user
+from pirateface.seed import clients, hub, hybrid, package, user
 from pirateface.seed.per_file.command import seed_model
 from pirateface.seed.user import SeedError
 
@@ -81,7 +81,7 @@ def build_torrent(src, save_dir, name, trackers):
     print(f"    {len(paths)} files included, {len(skipped)} skipped")
     print("==> Hashing and creating the torrent")
     sums = {}  # SHA-256 of each file, filled by the same read that hashes the pieces
-    data, v1, v2 = package.make_torrent(save_dir, name, trackers, sums)
+    data, v1, v2 = hybrid.build(save_dir / name, trackers, sums=sums)
     return paths, sums, data, v1, v2
 
 

@@ -67,10 +67,7 @@ def complete_copy(qbt, repo, old, v1, name):
 def build_hybrid(name, folder, files, trackers):
     """(hybrid .torrent bytes, its v1 infohash, SHA-256 manifest) of files, same name and paths as the v1 torrent."""
     sums = {}  # each file's SHA-256, from the same read; must match the site's manifest
-    sources = sorted(
-        ((p.split("/"), lambda p=p: folder.joinpath(p).open("rb")) for p, _, _ in files),
-        key=lambda s: [c.encode() for c in s[0]],
-    )
+    sources = hybrid.from_folder(folder, [p.split("/") for p, _, _ in files])
     plen = hybrid.piece_length(sum(size for _, size, _ in files))
     data, new_v1, _ = hybrid.build_from(name, sources, trackers, plen, sums)
     return data, new_v1, [{"path": p, "sha256": h} for p, h in sorted(sums.items())]

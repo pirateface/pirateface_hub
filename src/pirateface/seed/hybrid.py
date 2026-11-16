@@ -81,8 +81,18 @@ class _V1Pieces:
         return b"".join(self.done)
 
 
+def torrent_order(parts):
+    """Sort key putting paths (lists of components) in torrent order: bytewise per component."""
+    return [s.encode() for s in parts]
+
+
+def from_folder(root, paths):
+    """build_from() sources for the files paths (lists of components) under root, in torrent order."""
+    return [(p, lambda p=p: Path(root).joinpath(*p).open("rb")) for p in sorted(paths, key=torrent_order)]
+
+
 def files_under(root):
-    """Relative paths (lists of components) of every file under root, following links, in torrent order.
+    """Relative paths (lists of components) of every file under root, following links.
 
     A top-level .pad directory is left out. Some clients write BEP 47 pad files there when they download,
     they are zeros the swarm serves anyway rather than model files, and listing them would put pad bytes
@@ -91,7 +101,7 @@ def files_under(root):
     """
     root = Path(root)
     paths = [list((d / f).relative_to(root).parts) for d, _, names in root.walk(follow_symlinks=True) for f in names]
-    return sorted((p for p in paths if p[0] != ".pad"), key=lambda p: [s.encode() for s in p])
+    return [p for p in paths if p[0] != ".pad"]
 
 
 def build(root, trackers, plen=None, sums=None):
@@ -103,13 +113,11 @@ def build(root, trackers, plen=None, sums=None):
         raise ValueError("no files to put in the torrent")
     if plen is None:
         plen = piece_length(sum(root.joinpath(*p).stat().st_size for p in paths))
-    return build_from(
-        root.absolute().name, [(p, lambda p=p: root.joinpath(*p).open("rb")) for p in paths], trackers, plen, sums
-    )
+    return build_from(root.absolute().name, from_folder(root, paths), trackers, plen, sums)
 
 
 def build_from(name, sources, trackers, plen, sums=None):
-    """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (files_under sorts them).
+    """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (from_folder sorts them).
 
     opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
     except the last must return exactly BLOCK bytes: each read is hashed as one v2 leaf. Nothing is kept,
