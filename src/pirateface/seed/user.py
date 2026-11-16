@@ -41,7 +41,7 @@ def ask(prompt, hidden=False):
 
 
 def load_key():
-    """Account key from /account, saved for next time."""
+    """Account key from /settings, saved for next time."""
     key = read_key()
     if key:
         return key
