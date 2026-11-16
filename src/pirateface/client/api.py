@@ -249,6 +249,17 @@ def torrent_status(infohash):
         return None
 
 
+def my_torrents(key):
+    """This account's listed v1-only torrents as [{repo, infohash}], for pf seed --upgrade --mine.
+    None if the site did not answer (key rejected or unreachable)."""
+    req = urllib.request.Request(f"{API}/api/torrents?mine=1", headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r).get("torrents")
+    except Exception:
+        return None
+
+
 def restore(key, data):
     """POST raw .torrent bytes to /api/torrents/restore. Returns (HTTP status, JSON answer)."""
     req = urllib.request.Request(

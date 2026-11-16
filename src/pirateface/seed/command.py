@@ -126,6 +126,8 @@ def run(args):
         elif args.upgrade:
             if args.repo_id:
                 upgrade.rebuild(args.repo_id)
+            elif args.mine:
+                upgrade.upgrade_mine()
             else:
                 upgrade.switch_all()
         elif args.hf_cache:

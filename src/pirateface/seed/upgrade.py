@@ -2,8 +2,10 @@
 
 With a repo (its uploader): rebuild your v1 torrent of it as a hybrid from the copy qBittorrent seeds, same name and
 paths, and have Pirate Face list it in place of the old one. Then seed it at once from the same files, drop the old
-torrent (files stay) and add the per-file swarms. Without a repo (any seeder): switch every torrent in qBittorrent
-that Pirate Face replaced this way to its replacement, so you keep seeding the swarm that is listed."""
+torrent (files stay) and add the per-file swarms. With --mine (its uploader too): the same for every listed v1
+torrent you submitted that has a complete copy in qBittorrent, in one command, reporting the ones it could not.
+Without a repo (any seeder): switch every torrent in qBittorrent that Pirate Face replaced this way to its
+replacement, so you keep seeding the swarm that is listed."""
 
 import base64
 from pathlib import Path
@@ -27,10 +29,11 @@ def _remove(qbt, entry):
     qbt.call("torrents/delete", {"hashes": entry["hash"], "deleteFiles": "false"})
 
 
-def listed_v1(repo):
-    """(.torrent bytes, name, v1 infohash) of the repo's listed v1-only torrent, or None if it is already hybrid."""
+def listed_v1(repo, infohash=None):
+    """(.torrent bytes, name, v1 infohash) of the repo's listed v1-only torrent (or the one with that infohash, which
+    the site redirects to its hybrid once upgraded), or None if it is already hybrid."""
     try:
-        old = api.torrent_file(repo)
+        old = api.download(f"/api/torrents/{infohash}.torrent") if infohash else api.torrent_file(repo)
     except api.Unreachable as e:
         raise SeedError(f"could not reach {API}") from e
     if not old:
@@ -80,9 +83,15 @@ def send_upgrade(key, v1, data, manifest):
 def rebuild(repo):
     key = user.load_key()
     qbt = _qbittorrent()
-    listed = listed_v1(repo)
+    upgrade_one(qbt, key, repo)
+
+
+def upgrade_one(qbt, key, repo, infohash=None):
+    """Upgrade repo's listed v1 torrent (or the one with that infohash). Returns "upgraded" or "already" (its .torrent
+    is hybrid now); raises SeedError when it cannot be upgraded."""
+    listed = listed_v1(repo, infohash)
     if not listed:
-        return
+        return "already"
     old, name, v1 = listed
     entry, folder, files = complete_copy(qbt, repo, old, v1, name)
     print(f"==> Rebuilding {repo} as a hybrid torrent from {folder}")
@@ -95,6 +104,40 @@ def rebuild(repo):
     print(f"    Seeding the hybrid ({new_v1}) from the same files; the v1 torrent is out of qBittorrent.")
     print("    Seeders of the old torrent get told to switch: pf seed --upgrade")
     seed_model(data, entry["save_path"], new_v1, verified=True, label=repo)
+    return "upgraded"
+
+
+def upgrade_mine():
+    """Relist every v1 torrent this account submitted that has a complete copy in qBittorrent, in one
+    command. It keeps going on the ones that fail and prints them as one list at the end. Safe to rerun:
+    a torrent whose .torrent is hybrid already is skipped."""
+    key = user.load_key()
+    qbt = _qbittorrent()
+    mine = api.my_torrents(key)
+    if mine is None:
+        raise SeedError(f"could not list your torrents from {API} (key rejected or site down)")
+    if not mine:
+        print("    You have no listed v1-only torrents to upgrade.")
+        return
+    print(f"==> Upgrading your {len(mine)} listed v1 torrents")
+    done = already = 0
+    problems = []
+    for row in mine:
+        repo = row["repo"]
+        try:
+            state = upgrade_one(qbt, key, repo, row["infohash"])
+        except SeedError as e:
+            problems.append(f"{repo}: {e}")
+        else:
+            if state == "upgraded":
+                done += 1
+            else:
+                already += 1
+    print(f"    {done} upgraded, {already} already hybrid, {len(problems)} could not.")
+    if problems:
+        print("    Not upgraded:")
+        for line in problems:
+            print(f"      {line}")
 
 
 def replacement(qbt, t):
