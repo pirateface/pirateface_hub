@@ -39,8 +39,8 @@ pf seed --upgrade org/model # relist your v1-only torrent as hybrid (v1 + v2) so
 pf seed --upgrade           # switch torrents Pirate Face replaced to their replacements
 ```
 
-`pf seed --update-per-file` ends by listing the models that can't get per-file swarms and why: v1 only,
-no file of 1 MiB or more, not complete, or not in qBittorrent.
+`pf seed --update-per-file` then lists the two kinds of model you can act on: v1-only ones (run
+`pf seed --upgrade` to make them per-file) and ones that aren't complete yet.
 
 `pf work --max-size 100` takes only models up to 100 GiB. `pf work --once` takes one job and exits.
 

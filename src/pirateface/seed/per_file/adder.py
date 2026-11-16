@@ -27,12 +27,7 @@ class Adder:
         self.asked = self.listed = 0  # files looked up / that Pirate Face answered for
 
     def add_files(self, found, v1, verified):
-        """found: local_files() of the model torrent whose v1 infohash is v1.
-        "ready" if the model's files now have per-file torrents in qBittorrent (added now, already there,
-        or added for an earlier model in this run); "no-entry" if none of them can join a per-file swarm;
-        else None (no files)."""
-        before_asked = self.asked
-        shared = False
+        """found: local_files() of the model torrent whose v1 infohash is v1."""
         for path, root in found:
             self.asked += 1
             entry = api.file_root(root)
@@ -41,15 +36,11 @@ class Adder:
             self.listed += 1
             if all(s["infohash"] == v1 for s in entry["siblings"]):
                 continue  # only in this upload
-            shared = True
             h = entry["infohashV2"]
             if h in self.known:
                 self.had.add(h)
             elif h not in self.added and self.add_file(entry, path, verified):
                 self.added.add(h)
-        if shared:
-            return "ready"
-        return "no-entry" if self.asked > before_asked else None
 
     def add_file(self, entry, path, verified):
         name = entry["name"]  # from the first upload that had the file; can differ from yours

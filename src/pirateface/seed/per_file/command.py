@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pirateface.seed import clients
 from pirateface.seed.per_file.adder import Adder
-from pirateface.seed.per_file.files import MIN_SIZE, biggest_file, local_files, seeded_models
+from pirateface.seed.per_file.files import MIN_SIZE, biggest_file, local_files
 from pirateface.seed.user import SeedError, seeding_tracker
 
 NEEDS_QBITTORRENT = "per-file torrents are BitTorrent v2 only and need qBittorrent (Web UI on)"
@@ -53,95 +53,68 @@ def repo_of(t):
     return t.get("name") or t["hash"][:8]
 
 
-BUCKETS = ("ready", "v1_only", "no_big", "incomplete", "not_in_qbt", "not_listed", "unreadable")
-
-
-def classify(t, qbt, adder, seen):
-    """(bucket, label) for one qBittorrent torrent: whether its per-file torrents are ready, or which
-    can't-go-per-file bucket it lands in. None skips it: pure-v2 torrents are per-file torrents themselves,
-    and a torrent without a Pirate Face tracker isn't a model pf seeded."""
+def classify(t, qbt, adder):
+    """(bucket, label) for one qBittorrent torrent, or None to skip it. Pure-v2 torrents are per-file
+    torrents themselves, and a torrent without a Pirate Face tracker isn't a model pf seeded. Only the two
+    kinds a seeder can act on are reported; everything else gets its per-file torrents added or is skipped."""
     if not t.get("infohash_v1") or not clients.is_pirateface(qbt.trackers(t["hash"])):
         return None
     label = repo_of(t)
-    seen.update(x for x in (t.get("infohash_v1"), t.get("infohash_v2")) if x)
     try:
         data = qbt.export(t["hash"])
         if biggest_file(data) < MIN_SIZE:
-            return "no_big", label
+            return None  # nothing of 1 MiB or more is worth a per-file swarm
         found = local_files(data, t["save_path"])
     except (OSError, RuntimeError, ValueError) as exc:  # OSError: qBittorrent 409 before metadata is fetched
         print(f"    Skipped {t.get('name') or t['hash'][:8]}: {exc}")
-        return "unreadable", label
+        return None
     if found is None:
         return "v1_only", label
     if t.get("progress") != 1 or not found:
         return "incomplete", label  # its files aren't all there yet, so its per-file torrents can't seed
-    outcome = adder.add_files(found, t["infohash_v1"], verified=True)
-    return ("ready" if outcome == "ready" else "not_listed"), label
+    adder.add_files(found, t["infohash_v1"], verified=True)
+    return None
 
 
-def scan_qbittorrent(qbt, adder):
-    """(buckets, seen): every Pirate Face model torrent in qBittorrent, bucketed by whether its per-file
-    torrents are ready or why they can't be; seen is its infohashes, so the seed folders report only the rest."""
-    buckets = {b: [] for b in BUCKETS}
-    seen = set()
+def scan(qbt, adder):
+    """(v1_only, incomplete): the Pirate Face model torrents in qBittorrent that the seeder can act on.
+    The rest are either skipped or got their per-file torrents added, with nothing reported."""
+    v1_only, incomplete = [], []
     for t in qbt.torrents():
-        result = classify(t, qbt, adder, seen)
+        result = classify(t, qbt, adder)
         if result:
             bucket, label = result
-            buckets[bucket].append(label)
-    return buckets, seen
+            (v1_only if bucket == "v1_only" else incomplete).append(label)
+    return v1_only, incomplete
 
 
-def add_from_seed_folders(buckets, seen):
-    """Bucket the models pf has seeded that qBittorrent doesn't hold, from the .torrent files under SEEDS."""
-    for label, v1, v2 in seeded_models():
-        if v1 in seen or (v2 and v2 in seen):
-            continue  # in qBittorrent: already counted above
-        buckets["v1_only" if v2 is None else "not_in_qbt"].append(label)
+def print_models(labels):
+    """At most 20 models, then a count of the rest; the heading above names the group."""
+    for label in labels[:20]:
+        print(f"      {label}")
+    if len(labels) > 20:
+        print(f"      … and {len(labels) - 20} more")
 
 
-def report(buckets, adder):
-    """Print the per-file outcome: how many models are ready, and every can't-go-per-file one by why."""
-    site_silent = adder.asked and not adder.listed
-    if site_silent:
+def report(v1_only, incomplete, adder):
+    """The two lists a seeder can act on, each with what to do. Nothing else is printed."""
+    if adder.asked and not adder.listed:
         print(NOT_YET)
-    print(f"    Per-file ready: {len(buckets['ready'])} models.")
-    print(f"    Added {len(adder.added)} per-file torrents ({len(adder.had)} already there).")
-    not_listed = (
-        "couldn't be checked: Pirate Face didn't answer"
-        if site_silent
-        else "no per-file swarm to join: its files aren't shared with another listed upload"
-    )
-    blocks = [
-        ("v1_only", "v1 only (no v2 infohash): these can never have per-file swarms"),
-        ("not_in_qbt", "not in qBittorrent: per-file torrents are v2 only, so they must seed there"),
-        ("no_big", "no file of 1 MiB or more: nothing worth a per-file swarm"),
-        ("incomplete", "not complete in qBittorrent: their files aren't all there yet"),
-        ("not_listed", not_listed),
-        ("unreadable", "their metadata couldn't be read"),
-    ]
-    skipped = sum(len(buckets[b]) for b, _ in blocks)
-    print(f"    Can't go per-file: {skipped} models:")
-    for bucket, heading in blocks:
-        labels = buckets[bucket]
-        if not labels:
-            continue
-        print(f"      {len(labels)} {heading}:")
-        for label in labels[:20]:
-            print(f"        {label}")
-        if len(labels) > 20:
-            print(f"        … and {len(labels) - 20} more")
+    if v1_only:
+        print("    These are v1 only. Run `pf seed --upgrade` to make them per-file:")
+        print_models(v1_only)
+    if incomplete:
+        print("    These aren't complete yet:")
+        print_models(incomplete)
 
 
 def update_all():
-    """Per-file torrents for every model pf has seeded that can have them, then which ones can't and why
-    (v1 only, no file of 1 MiB or more, not complete, not in qBittorrent)."""
+    """Per-file torrents for every model pf has seeded that can have them, then the two kinds the seeder
+    can act on: v1-only models (run pf seed --upgrade) and ones that aren't complete yet."""
     print("==> Adding per-file swarms for the Pirate Face torrents you seed")
     qbt = qbittorrent()
     if not qbt:
         raise SeedError(NEEDS_QBITTORRENT)
     adder = Adder(qbt, mine=seeding_tracker())
-    buckets, seen = scan_qbittorrent(qbt, adder)
-    add_from_seed_folders(buckets, seen)
-    report(buckets, adder)
+    v1_only, incomplete = scan(qbt, adder)
+    report(v1_only, incomplete, adder)

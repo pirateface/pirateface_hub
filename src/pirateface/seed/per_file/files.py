@@ -3,12 +3,9 @@
 Pirate Face publishes a pure v2 torrent per file (by BEP 52 pieces root, /api/files/<root>). Every upload
 with the same bytes shares it. The model torrent already holds each file's pieces root: nothing is hashed."""
 
-import contextlib
 from pathlib import Path
 
 import libtorrent as lt
-
-from pirateface.config import SEEDS
 
 MIN_SIZE = 1 << 20  # configs and tokenizers aren't worth a swarm each
 
@@ -37,19 +34,3 @@ def biggest_file(data):
         (fs.file_size(i) for i in range(fs.num_files()) if not (fs.file_flags(i) & fs.flag_pad_file)),
         default=0,
     )
-
-
-def seeded_models():
-    """(label, v1, v2 or None) of every model pf has ever seeded, from the .torrent files it wrote under SEEDS
-    (one per model folder, named <author>--<model>, or the old <model>). update_all asks qBittorrent for the
-    models it already holds and uses this list for the rest, so the report covers every model, not only the
-    ones that happen to be in qBittorrent."""
-    for folder in sorted(Path(SEEDS).iterdir()):
-        if not folder.is_dir():
-            continue
-        for tor in sorted(folder.glob("*.torrent")):
-            with contextlib.suppress(Exception):  # not a torrent pf wrote: skip it
-                info = lt.torrent_info(tor.read_bytes())
-                v2 = info.info_hashes().v2
-                label = folder.name.replace("--", "/", 1) if "--" in folder.name else folder.name
-                yield label, str(info.info_hashes().v1), None if v2.is_all_zeros() else str(v2)
