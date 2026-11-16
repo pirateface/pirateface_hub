@@ -1,4 +1,4 @@
-"""Model folder -> links, checksums and a hybrid (v1 + v2) torrent."""
+"""Model folder -> links in the seed folder; a .torrent's info, trackers and magnet."""
 
 import contextlib
 import os
@@ -10,7 +10,6 @@ import libtorrent as lt
 
 from pirateface.config import SEEDS
 from pirateface.listing import listing_problems, unsafe_path
-from pirateface.seed import hybrid
 
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
@@ -126,12 +125,6 @@ def link_existing(src, dest, paths):
     for p in found:
         link(Path(src, p).absolute(), dest / p)
     return len(found)
-
-
-def make_torrent(save_dir, name, trackers, sums=None):
-    """Hybrid v1 + v2 torrent of save_dir/name (see hybrid.py). Returns (bytes, v1 infohash, v2 infohash).
-    sums: a dict to fill with each file's SHA-256, read in the same pass."""
-    return hybrid.build(Path(save_dir, name), trackers, sums=sums)
 
 
 def with_trackers(data, trackers):

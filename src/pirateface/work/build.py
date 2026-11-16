@@ -69,7 +69,7 @@ class Lease:
 def build(job, key, trackers, name=None):
     """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash)."""
     repo, revision = job["repoId"], job["revision"]
-    files = sorted(job["files"], key=lambda f: [s.encode() for s in f["path"].split("/")])
+    files = sorted(job["files"], key=lambda f: hybrid.torrent_order(f["path"].split("/")))
     total = sum(f["size"] for f in files)
     lease = Lease(key, job["leaseId"], total, name)
     lease.renew()  # confirm we hold the lease before streaming
