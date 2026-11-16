@@ -103,6 +103,11 @@ def _main():
     model.add_argument(
         "--hf-cache", action="store_true", help="every complete model in the Hugging Face cache, asking per model"
     )
+    model.add_argument(
+        "--from-cache",
+        action="store_true",
+        help="seed already-listed torrents from Hugging Face/Ollama cache files (qBittorrent required)",
+    )
     per_file = s.add_argument_group("per-file layer", "a swarm per shared file, on top of the model torrent")
     per_file.add_argument(
         "--update-per-file",

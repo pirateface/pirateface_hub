@@ -33,6 +33,7 @@ More `pf seed` options:
 
 ```sh
 pf seed --hf-cache          # every complete model in your Hugging Face cache, asking per model
+pf seed --from-cache        # seed listed torrents matching Hugging Face/Ollama cache files
 pf seed --update-trackers   # add your seeding tracker to torrents you already seed
 pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent, then say which can't
 pf seed --no-per-file org/model  # skip per-file swarms
@@ -51,7 +52,29 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 
 `pf submit --direct --repo your-org/model FOLDER` publishes your own model that isn't on Hugging Face.
 
-`pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). Run `pf <command> --help` for every flag.
+`pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). `pf seed --from-cache` asks for it only after you choose a match to seed. Run `pf <command> --help` for every flag.
+
+## Seed models already in your caches
+
+`pf seed --from-cache` looks for existing Pirate Face torrents that match files already in your Hugging
+Face or Ollama cache:
+
+```sh
+pf seed --from-cache
+```
+
+It reads SHA-256 names from the Hugging Face cache and Ollama blobs, looks up candidate listings, and
+hashes only snapshot files that are not already named by SHA-256. Ollama is found at `OLLAMA_MODELS` when
+set, or its standard model directory otherwise. The command stages symlinks in `PIRATEFACE_SEEDS/matches`,
+adds each torrent stopped to qBittorrent 5.x (paused on 4.x), and asks qBittorrent to recheck the existing
+files. A torrent starts only if the recheck reaches 100%; incomplete torrents are removed without
+downloading missing data. No file copies are made.
+qBittorrent must already be running with its Web UI reachable through `QBT_URL`, `QBT_USER`, and `QBT_PASS`
+as needed; this option does not edit qBittorrent settings.
+
+Each candidate is shown with its current seed and leecher counts and requires confirmation unless `-y` is
+passed. The keyed tracker is added after confirmation so seeding counts toward your account. This scans
+cached model repositories and Ollama model names only; it does not create or submit listings.
 
 ## When Pirate Face is down
 
@@ -81,6 +104,7 @@ pf index --sync   # mirror the build the site names, replacing copies the build 
 |---|---|
 | `PIRATEFACE_KEY` | Account key (otherwise asked once and saved) |
 | `QBT_URL`, `QBT_USER`, `QBT_PASS` | qBittorrent Web UI (default `http://localhost:8080`) |
+| `OLLAMA_MODELS` | Ollama model store root (default: the detected Ollama model directory) |
 | `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
 | `HF_TOKEN` | For gated repos |
 | `PF_DISABLE` | Set to `1` to turn the download hook off |

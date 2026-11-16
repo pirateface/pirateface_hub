@@ -120,12 +120,31 @@ def update_trackers():
 def run(args):
     user.YES = args.yes
     try:
+        if (
+            args.cmd == "seed"
+            and args.from_cache
+            and (
+                args.repo_id
+                or args.folder
+                or args.revision
+                or args.hf_cache
+                or args.update_trackers
+                or args.update_per_file
+                or args.upgrade
+                or args.mine
+            )
+        ):
+            raise SeedError("--from-cache cannot be combined with a repo, folder or another seed mode")
         if args.cmd == "submit":
             submit.submit(args)
         elif args.update_trackers:
             update_trackers()
         elif args.update_per_file:
             update_all()
+        elif args.from_cache:
+            from pirateface.seed import from_cache
+
+            from_cache.seed_from_cache(args.per_file)
         elif args.upgrade:
             if args.repo_id:
                 upgrade.rebuild(args.repo_id)
@@ -140,7 +159,9 @@ def run(args):
         elif args.repo_id:
             seed(args.repo_id, args.folder, args.revision, args.per_file)
         else:
-            raise SeedError("give a repo (author/model), --hf-cache, --update-trackers, --update-per-file or --upgrade")
+            raise SeedError(
+                "give a repo (author/model), --hf-cache, --from-cache, --update-trackers, --update-per-file or --upgrade"
+            )
     except user.RateLimited as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(75)  # same code as package.sh, so scripts that loop over models can stop
