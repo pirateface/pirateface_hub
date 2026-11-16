@@ -4,12 +4,14 @@ import contextvars
 import functools
 import hashlib
 import inspect
+import re
 import sys
 from pathlib import Path
 
 from pirateface import config, ui
 from pirateface.client import api, torrent
 from pirateface.huggingface import transport
+from pirateface.index import mirror
 
 FUNC = "_download_to_tmp_and_move"
 # FUNC isn't passed the repo id, so the outer functions record it here.
@@ -80,12 +82,49 @@ def _from_torrent(filename, etag, dest):
         return False
     try:
         pf_only = api.pf_only(repo_id) is not None
-    except api.Unreachable as e:
-        raise torrent.Unavailable("Pirate Face unreachable") from e
+    except api.Unreachable:
+        # The site is down. The cached index may still name this repo's swarm, so try that before
+        # handing the file to Hugging Face.
+        return _from_index(repo_id, filename, dest, etag)
     src = torrent.fetch_file(repo_id, filename, config.PF_ONLY_STALL_TIMEOUT if pf_only else config.STALL_TIMEOUT)
     if not _place_checked(src, dest, etag):
         raise ValueError("torrent copy didn't match Hugging Face's fingerprint")
     ui.from_swarm(filename, src.stat().st_size, "Pirate Face" if pf_only else "Hugging Face")
+    return True
+
+
+def _from_index(repo_id, filename, dest, etag):
+    """Fetch the file from the swarm the cached index names, when Pirate Face cannot be reached.
+
+    The check that decides is the Hugging Face fingerprint the download already holds: it is what ties
+    these bytes to a repo and a revision. _place_checked writes the copy beside `dest`, compares that
+    fingerprint, and only replaces `dest` when it matches. Without a fingerprint there is nothing to
+    compare, so such a download is left to Hugging Face.
+    """
+    entry = mirror.resolve(repo_id)
+    if entry is None:
+        raise torrent.Unavailable(
+            "the cached index lost a removals list, so it is not being used"
+            if mirror.broken()
+            else "not in the cached index"
+        )
+    # Checked before the download, and on the shape _place_checked can compare -- it compares against
+    # hexdigest(), which is lowercase, so normalise here rather than fetching a file that cannot match.
+    etag = (etag or "").removeprefix("W/").strip('"').lower()
+    if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", etag):
+        raise torrent.Unavailable("Hugging Face gave no fingerprint to check the index's copy against")
+    try:
+        # Hugging Face is still there to take the file if the swarm stalls, so the ordinary timeout applies.
+        src = torrent.fetch_file(repo_id, filename, config.STALL_TIMEOUT, magnet=entry.magnet)
+    except torrent.NotInTorrent:
+        # The repo is in the index but its torrent carries only part of it: say so, before Hugging Face
+        # ends up filling the rest.
+        raise torrent.Unavailable(
+            f"the cached index's copy of {repo_id} (build {entry.build}) does not have this file"
+        ) from None
+    if not _place_checked(src, dest, etag):
+        raise torrent.Unavailable("the cached index's copy is not the revision Hugging Face named")
+    ui.from_index(filename, src.stat().st_size, entry.build)
     return True
 
 

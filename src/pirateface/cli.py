@@ -1,6 +1,7 @@
 import argparse
 import re
 import sys
+import time
 
 import pirateface._boot  # noqa: F401  # uv tools skip .pth files
 
@@ -23,6 +24,36 @@ def _max_size(value):
     return size
 
 
+def _index(module, do_sync):
+    from pirateface import ui
+
+    try:
+        date = module.sync() if do_sync else module.build()
+        models = module.count() if date else 0
+    except Exception as e:  # no peers, no disk: say it once instead of a traceback
+        print(f"could not read the index: {e}")
+        return 1
+    if date is None:
+        print("no cached index yet: run `pf index --sync` once, while Pirate Face is reachable")
+        return 1
+    if module.broken():
+        print("a removals list could not be read, so this copy answers nothing: run `pf index --sync`")
+        return 1
+    rows = [("build", date), ("models", f"{models:,}"), ("in", str(module.SHARDS))]
+    if not models:
+        rows.append(("next", "run `pf index --sync` if this should not be empty"))
+    said = module.state()
+    mirrored = module.infohash_of(said.get("magnet") or "")
+    found = module.published()
+    if found and mirrored and found[1] != mirrored:
+        rows.append(("next", "a newer build is available: run `pf index --sync`"))
+    if synced := said.get("synced"):
+        rows.append(("mirrored", time.strftime("%Y-%m-%d %H:%M", time.localtime(synced))))
+    # The report goes through the same writer as every other fact: one line each, labels aligned.
+    ui.aligned(rows)
+    return 0
+
+
 def main():
     try:
         return _main()
@@ -43,7 +74,8 @@ def _main():
             "  pf seed --update-per-file    per-file swarms for what you already seed\n"
             "  pf seed --upgrade org/model  v1 only becomes hybrid v1+v2\n"
             "  pf work --once               one queued model, from Hugging Face\n"
-            "  pf restore PATH              put a .torrent back on a listing"
+            "  pf restore PATH              put a .torrent back on a listing\n"
+            "  pf index [--sync]            show the cached index, or mirror a newer build"
         ),
     )
     from pirateface.client.api import VERSION
@@ -144,7 +176,20 @@ def _main():
         "paths", nargs="+", help=".torrent file(s) or folder(s) (e.g. qBittorrent BT_backup or Transmission torrents/)"
     )
     r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
+    i = sub.add_parser(
+        "index",
+        help="the cached magnet index: show the build it holds, or mirror a newer one",
+        description="The index is what lets a download start while Pirate Face is down. Mirroring fetches the "
+        "index torrent's shards into the cache, and replaces any cached copy the build names differently "
+        "-- by size, or by a different sha256 for the same size where a digest has been recorded.",
+    )
+    i.add_argument("--sync", action="store_true", help="mirror the index torrent's shards into the cache now")
     args = p.parse_args()
+
+    if args.cmd == "index":
+        from pirateface.index import mirror
+
+        return _index(mirror, args.sync)
 
     if args.cmd == "work":
         from pirateface import work
