@@ -53,7 +53,10 @@ def complete_copy(qbt, repo, old, v1, name):
     if not entry or entry.get("progress") != 1:
         raise SeedError(f"qBittorrent must hold {repo}'s torrent complete. Run pf seed {repo}, let it finish, rerun")
     folder = Path(entry["save_path"], name)
-    files = torrent.files_in(old)
+    try:
+        files = torrent.files_in(old)
+    except torrent.Unsafe as e:
+        raise SeedError(f"{repo}'s listed .torrent lists paths pf won't write: {e}") from e
     for path, size, _ in files:
         if not folder.joinpath(path).is_file() or folder.joinpath(path).stat().st_size != size:
             raise SeedError(f"{folder / path} is missing or has the wrong size")

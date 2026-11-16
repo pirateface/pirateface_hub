@@ -13,6 +13,7 @@ import libtorrent as lt
 
 from pirateface import config, ui
 from pirateface.client import api
+from pirateface.listing import info_problems, unsafe_path
 
 CACHE_DIR = Path(config.CACHE_DIR)
 _lock = threading.Lock()
@@ -29,6 +30,11 @@ _idle_cv = threading.Condition(_lock)  # signalled when a repo's in-flight fetch
 
 class Unavailable(Exception):
     pass
+
+
+class Unsafe(Unavailable):
+    """The torrent lists a path this client will not write: one that leaves the torrent's own folder, or a
+    name this OS cannot store."""
 
 
 def _get_session():
@@ -126,14 +132,17 @@ def _setup_lock(repo_id):
 
 
 def _remembered(repo_id):
-    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo (a
-    remembered None means "not on Pirate Face")."""
+    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo.
+
+    A remembered None means "not on Pirate Face"; a remembered Unsafe means its listing was refused, and
+    carries the reason for every later file of the same repo."""
     with _lock:
         return _handles.get(repo_id, _NOT_CACHED)
 
 
 def _remember(repo_id, handle):
-    """Remember the repo's handle, or None for "not on Pirate Face", under _lock."""
+    """Remember the repo's handle, None for "not on Pirate Face", or the Unsafe that refused its listing --
+    one map says what happened to a repo, so nothing has to be kept in step with it."""
     with _lock:
         _handles[repo_id] = handle
 
@@ -189,6 +198,21 @@ def _wait_for_metadata(repo_id, h):
         time.sleep(0.2)
 
 
+def _check_listing(repo_id, h, saved):
+    """Refuse a listing this client won't write, before the handle is remembered or its .torrent cached.
+
+    libtorrent writes the torrent's own paths under save_path, so this is the one place the download can be
+    stopped: every file is still skipped (default_dont_download), so nothing has been prioritised or created."""
+    info = lt.bdecode(h.torrent_file().info_section())
+    try:
+        files_in(info)  # the decoded info dict: no re-encode, and the result is only used to refuse
+    except Unsafe as e:
+        _get_session().remove_torrent(h)
+        saved.unlink(missing_ok=True)  # the .torrent we cached from the site, kept for nothing
+        _remember(repo_id, e)  # the reason, not None: every later file of this repo says the same
+        raise
+
+
 def _cache_file_list(saved, h):
     """Save the file list a peer sent, so a magnet alone needs a live peer only the first time."""
     if not saved.exists():
@@ -202,6 +226,8 @@ def _handle(repo_id, resume=None):
     file list doesn't hold up every other repo's downloads and status lines."""
     cached = _remembered(repo_id)
     if cached is not _NOT_CACHED:
+        if isinstance(cached, Unsafe):
+            raise Unavailable(str(cached))
         return cached
     magnet = _lookup_magnet(repo_id)
     if magnet is None:
@@ -209,6 +235,7 @@ def _handle(repo_id, resume=None):
     atp, saved = _torrent_params(repo_id, magnet, resume)
     h = _get_session().add_torrent(atp)
     _wait_for_metadata(repo_id, h)
+    _check_listing(repo_id, h, saved)
     _cache_file_list(saved, h)
     _remember(repo_id, h)
     threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
@@ -384,20 +411,51 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
                 _idle_cv.notify_all()
 
 
+PAD_DIR = ".pad"  # pad bytes a creator wrote out by hand, without attr=p to say so
+
+
 def files_in(data):
-    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out."""
-    torrent = lt.bdecode(data)
-    info = torrent[b"info"]
-    name = info[b"name"].decode()
-    if b"files" not in info:
-        return [(name, info[b"length"], web_seed_url(torrent, name))]
-    files = []
-    for f in info[b"files"]:
-        if b"p" in f.get(b"attr", b""):
-            continue
-        path = "/".join(part.decode() for part in f[b"path"])
-        files.append((path, f[b"length"], web_seed_url(torrent, f"{name}/{path}")))
-    return files
+    """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out.
+
+    Refuses with Unsafe -- naming the offending path -- a listing this client cannot write as given. Every
+    torrent path becomes a path on disk here, so a caller never has to check one again.
+
+    `data` is a .torrent's bytes or its decoded info dict: a caller that already decoded the info (the
+    download gate does, from the handle) needs no round trip. An info dict carries no BEP 19 web seed, so
+    the third element is None.
+    """
+    if isinstance(data, dict):
+        torrent, info = {}, data
+    else:
+        torrent = lt.bdecode(data)
+        info = torrent[b"info"]
+    try:
+        name = info[b"name"].decode()
+    except UnicodeDecodeError as e:
+        raise Unsafe(f"the torrent's name is not UTF-8: {info[b'name'][:80]!r}") from e
+    single = b"files" not in info
+    if single:
+        if b"length" not in info:
+            raise Unsafe(f"{name}: the torrent has no file list this client can read")  # BEP 52 v2 only
+        entries = [(name, info[b"length"])]
+    else:
+        entries = []
+        for f in info[b"files"]:
+            if b"p" in f.get(b"attr", b""):
+                continue
+            try:
+                parts = [part.decode() for part in f[b"path"]]
+            except UnicodeDecodeError as e:
+                raise Unsafe(f"{name}: refusing {f[b'path']!r}: a path that is not UTF-8") from e
+            if not parts:
+                raise Unsafe(f"{name}: a file in the torrent has no path")
+            if parts[0] == PAD_DIR:
+                continue  # a pad folder written out by hand, without attr=p to say so
+            entries.append(("/".join(parts), f[b"length"]))
+    why = unsafe_path(name) or next(iter(info_problems(info, [p for p, _ in entries])), None)
+    if why:
+        raise Unsafe(f"{name}: refusing {why}")
+    return [(p, size, web_seed_url(torrent, name if single else f"{name}/{p}")) for p, size in entries]
 
 
 def web_seed_url(torrent, path_in_torrent):
