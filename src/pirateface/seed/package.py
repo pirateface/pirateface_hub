@@ -1,8 +1,6 @@
 """Model folder -> links, checksums and a hybrid (v1 + v2) torrent."""
 
-import concurrent.futures
 import contextlib
-import hashlib
 import os
 import re
 import urllib.parse
@@ -126,20 +124,10 @@ def link_existing(src, dest, paths):
     return len(found)
 
 
-def checksums(root, paths):
-    """{path: sha256}"""
-
-    def one(p):
-        with Path(root, p).open("rb") as f:
-            return p, hashlib.file_digest(f, "sha256").hexdigest()
-
-    with concurrent.futures.ThreadPoolExecutor(4) as pool:
-        return dict(pool.map(one, paths))
-
-
-def make_torrent(save_dir, name, trackers):
-    """Hybrid v1 + v2 torrent of save_dir/name (see hybrid.py). Returns (bytes, v1 infohash, v2 infohash)."""
-    return hybrid.build(Path(save_dir, name), trackers)
+def make_torrent(save_dir, name, trackers, sums=None):
+    """Hybrid v1 + v2 torrent of save_dir/name (see hybrid.py). Returns (bytes, v1 infohash, v2 infohash).
+    sums: a dict to fill with each file's SHA-256, read in the same pass."""
+    return hybrid.build(Path(save_dir, name), trackers, sums=sums)
 
 
 def with_trackers(data, trackers):
