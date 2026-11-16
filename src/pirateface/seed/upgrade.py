@@ -94,7 +94,7 @@ def rebuild(repo):
     _remove(qbt, entry)
     print(f"    Seeding the hybrid ({new_v1}) from the same files; the v1 torrent is out of qBittorrent.")
     print("    Seeders of the old torrent get told to switch: pf seed --upgrade")
-    seed_model(data, entry["save_path"], new_v1, verified=True)
+    seed_model(data, entry["save_path"], new_v1, verified=True, label=repo)
 
 
 def replacement(qbt, t):

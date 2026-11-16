@@ -16,8 +16,9 @@ def qbittorrent():
     return next((c for c in clients.running() if isinstance(c, clients.QBittorrent)), None)
 
 
-def seed_model(data, save_dir, v1, verified=False):
-    """Per-file torrents for the model pf seed just added. verified: its files were just hashed."""
+def seed_model(data, save_dir, v1, verified=False, label=None):
+    """Per-file torrents for the model pf seed just added. verified: its files were just hashed.
+    label: the repo (author/model) to name in a skip."""
     print("\n==> Per-file swarms")
     try:
         found = local_files(data, save_dir)
@@ -34,7 +35,7 @@ def seed_model(data, save_dir, v1, verified=False):
     model = qbt.find(v1)
     verified = verified or bool(model and model.get("progress") == 1)
     adder = Adder(qbt, mine=seeding_tracker())
-    adder.add_files(found, v1, verified)
+    adder.add_files(found, v1, verified, label)
     if not adder.listed:
         print(NOT_YET)
     elif not adder.added | adder.had:
@@ -57,17 +58,19 @@ def classify(t, qbt):
     """(bucket, label, found) for one qBittorrent torrent, or None to skip it. bucket is "ready" (with
     the torrent's local files of 1 MiB or more in found), "v1_only" or "incomplete". Pure-v2 torrents are
     per-file torrents themselves, and a torrent without a Pirate Face tracker isn't a model pf seeded."""
-    if not t.get("infohash_v1") or not clients.is_pirateface(qbt.trackers(t["hash"])):
-        return None
+    if not t.get("infohash_v1"):
+        return None  # a per-file torrent itself, not a model
     label = repo_of(t)
     try:
+        if not clients.is_pirateface(qbt.trackers(t["hash"])):
+            return None  # not a model pf seeded
         data = qbt.export(t["hash"])
         if biggest_file(data) < MIN_SIZE:
             return None  # nothing of 1 MiB or more is worth a per-file swarm
         found = local_files(data, t["save_path"])
-    except (OSError, RuntimeError, ValueError) as exc:  # OSError: qBittorrent 409 before metadata is fetched
+    except (OSError, RuntimeError, ValueError) as exc:  # OSError: a qBittorrent call 404 or 409 (HTTPError)
         print(f"    Skipped {t.get('name') or t['hash'][:8]}: {exc}")
-        return None
+        return None  # one model's failure never stops the run
     if found is None:
         return "v1_only", label, None
     if t.get("progress") != 1 or not found:
@@ -85,7 +88,7 @@ def scan(qbt, adder):
             continue
         bucket, label, found = result
         if bucket == "ready":
-            adder.add_files(found, t["infohash_v1"], verified=True)
+            adder.add_files(found, t["infohash_v1"], verified=True, label=label)
         elif bucket == "v1_only":
             v1_only.append(label)
         else:
