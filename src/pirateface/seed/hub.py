@@ -7,11 +7,25 @@ import urllib.request
 from importlib.metadata import version
 
 
+class _SameHostAuth(urllib.request.HTTPRedirectHandler):
+    """Follow redirects, but send the Hugging Face token only to the host it was meant for: LFS files
+    redirect to a CDN on another host, which needs no token."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new and urllib.parse.urlsplit(new.full_url)[:2] != urllib.parse.urlsplit(req.full_url)[:2]:
+            new.remove_header("Authorization")
+        return new
+
+
+urlopen = urllib.request.build_opener(_SameHostAuth).open
+
+
 def _get(url):
     req = urllib.request.Request(url, headers={"User-Agent": f"pirateface/{version('pirateface')}"})
     if os.environ.get("HF_TOKEN"):
         req.add_header("Authorization", "Bearer " + os.environ["HF_TOKEN"])
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urlopen(req, timeout=30) as r:
         return json.load(r)
 
 

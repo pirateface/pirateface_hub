@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 
 from pirateface.client import api
+from pirateface.seed import hub
 from pirateface.work.errors import WorkError
 
 HF = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
@@ -23,7 +24,7 @@ def _open(url, headers, path, offset=0):
     last = None
     for attempt in range(ATTEMPTS):
         try:
-            resp = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60)
+            resp = hub.urlopen(urllib.request.Request(url, headers=headers), timeout=60)
         except urllib.error.HTTPError as e:
             if 400 <= e.code < 500:  # 401/403/404: retrying won't change the answer
                 raise WorkError(f"{path}: Hugging Face refused the request ({e.code})") from e
