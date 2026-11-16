@@ -20,7 +20,6 @@ _lock = threading.Lock()
 _session = None
 _handles = {}  # repo_id -> handle, or None if not on Pirate Face
 _NOT_CACHED = object()  # _handles.get() sentinel: a remembered None means "not on Pirate Face"
-_refused = {}  # repo_id -> why its listing was refused, so its other files say the same
 _wanted = {}
 _active = {}  # repo_id -> fetch_file calls currently downloading
 _setup = {}  # repo_id -> lock serialising handle setup
@@ -133,14 +132,17 @@ def _setup_lock(repo_id):
 
 
 def _remembered(repo_id):
-    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo (a
-    remembered None means "not on Pirate Face")."""
+    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo.
+
+    A remembered None means "not on Pirate Face"; a remembered Unsafe means its listing was refused, and
+    carries the reason for every later file of the same repo."""
     with _lock:
         return _handles.get(repo_id, _NOT_CACHED)
 
 
 def _remember(repo_id, handle):
-    """Remember the repo's handle, or None for "not on Pirate Face", under _lock."""
+    """Remember the repo's handle, None for "not on Pirate Face", or the Unsafe that refused its listing --
+    one map says what happened to a repo, so nothing has to be kept in step with it."""
     with _lock:
         _handles[repo_id] = handle
 
@@ -203,13 +205,11 @@ def _check_listing(repo_id, h, saved):
     stopped: every file is still skipped (default_dont_download), so nothing has been prioritised or created."""
     info = lt.bdecode(h.torrent_file().info_section())
     try:
-        files_in(lt.bencode({"info": info}))
+        files_in(info)  # the decoded info dict: no re-encode, and the result is only used to refuse
     except Unsafe as e:
         _get_session().remove_torrent(h)
         saved.unlink(missing_ok=True)  # the .torrent we cached from the site, kept for nothing
-        _remember(repo_id, None)
-        with _lock:
-            _refused[repo_id] = str(e)
+        _remember(repo_id, e)  # the reason, not None: every later file of this repo says the same
         raise
 
 
@@ -226,6 +226,8 @@ def _handle(repo_id, resume=None):
     file list doesn't hold up every other repo's downloads and status lines."""
     cached = _remembered(repo_id)
     if cached is not _NOT_CACHED:
+        if isinstance(cached, Unsafe):
+            raise Unavailable(str(cached))
         return cached
     magnet = _lookup_magnet(repo_id)
     if magnet is None:
@@ -329,7 +331,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
         with _setup_lock(repo_id):
             h = _handle(repo_id)
             if h is None:
-                raise Unavailable(_refused.get(repo_id, ""))
+                raise Unavailable()
             # A model download fetches files one at a time. After the last wanted file
             # completes the torrent goes "finished" and libtorrent drops the web seed,
             # so the next file never gets bytes and stalls until PF_STALL_TIMEOUT.
@@ -356,7 +358,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
                     _handles.pop(repo_id, None)
                 h = _handle(repo_id, resume)
                 if h is None:
-                    raise Unavailable(_refused.get(repo_id, ""))
+                    raise Unavailable()
 
             ti = h.torrent_file()
             i = _file_index(ti, filename)
@@ -416,9 +418,17 @@ def files_in(data):
     """(path, size, web seed URL or None) for each file in a .torrent, BEP 47 pad files left out.
 
     Refuses with Unsafe -- naming the offending path -- a listing this client cannot write as given. Every
-    torrent path becomes a path on disk here, so a caller never has to check one again."""
-    torrent = lt.bdecode(data)
-    info = torrent[b"info"]
+    torrent path becomes a path on disk here, so a caller never has to check one again.
+
+    `data` is a .torrent's bytes or its decoded info dict: a caller that already decoded the info (the
+    download gate does, from the handle) needs no round trip. An info dict carries no BEP 19 web seed, so
+    the third element is None.
+    """
+    if isinstance(data, dict):
+        torrent, info = {}, data
+    else:
+        torrent = lt.bdecode(data)
+        info = torrent[b"info"]
     try:
         name = info[b"name"].decode()
     except UnicodeDecodeError as e:
