@@ -9,16 +9,11 @@ from pathlib import Path
 import libtorrent as lt
 
 from pirateface.config import SEEDS
+from pirateface.listing import listing_problems, unsafe_path
 from pirateface.seed import hybrid
 
 # Hidden paths (.git, .cache, .env), keys and partial downloads stay out of the torrent.
 SKIP = re.compile(r"(^|/)(\.|__pycache__/|id_rsa)|\.(pem|key|incomplete|lock|part)$")
-
-
-# Names Windows can't store: reserved device names (with any extension), <>:"\\|?* and control
-# characters, and a trailing dot or space.
-WINDOWS_RESERVED = re.compile(r"(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9¹²³]|LPT[0-9¹²³])(\..*)?", re.IGNORECASE)
-WINDOWS_INVALID = re.compile(r'[<>:"\\|?*\x00-\x1f]|[. ]$')
 
 
 def seeds_folder(repo, v1):
@@ -58,29 +53,11 @@ def link(target, dest):
             ) from e
 
 
-def unsafe_path(rel, windows=True):
-    """Why rel ("/"-separated) can't be written under a folder as-is, or None: a part that is empty, "." or ".."
-    or holds a backslash would leave the folder (absolute and UNC forms included). With windows, names Windows
-    can't store are refused too: there a drive letter, a stream or a device name is another way out."""
-    for part in rel.split("/"):
-        if part in ("", ".", "..") or "\\" in part:
-            return f"{rel}: leaves its folder"
-        if windows and (WINDOWS_RESERVED.fullmatch(part) or WINDOWS_INVALID.search(part)):
-            return f"{rel}: not a valid file name on Windows"
-    return None
-
-
 def check_listing(data, paths):
-    """Raise LinkError if a listed torrent (paths: torrent.files_in) has a path unsafe_path refuses on this OS or
-    a symlink entry. Seeding links these paths into the seed folder and the torrent client writes them, so this
-    runs before either. Windows-only names stay seedable elsewhere: the listing is already published."""
-    files = lt.bdecode(data)[b"info"].get(b"files") or []
-    problems = [why for p in paths if (why := unsafe_path(p, windows=os.name == "nt"))]
-    problems += [
-        "/".join(p.decode(errors="replace") for p in f[b"path"]) + ": a symlink"
-        for f in files
-        if b"l" in f.get(b"attr", b"")
-    ]
+    """Raise LinkError if a listed torrent (paths: torrent.files_in) has a path this OS won't write or a symlink
+    entry. Seeding links these paths into the seed folder and the torrent client writes them, so this runs before
+    either. The checks themselves are in pirateface/listing.py, where the download path asks the same ones."""
+    problems = listing_problems(data, paths)
     if problems:
         raise LinkError("Pirate Face's .torrent lists paths pf won't write:\n    " + "\n    ".join(problems[:20]))
 

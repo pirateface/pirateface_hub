@@ -153,7 +153,10 @@ def pf_only(repo_id):
     from pirateface.client import torrent  # torrent imports api
 
     sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
-    files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
+    try:
+        files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
+    except torrent.Unsafe:
+        return None  # a listing the client won't write: same answer as "not only on Pirate Face"
     return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
 
 

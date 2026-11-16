@@ -52,7 +52,10 @@ def seed_listed(repo, src, key, per_file=False):
         raise SeedError(f"could not reach {API}") from e
     if not data:
         raise SeedError(f"Pirate Face has no .torrent for {repo} you can use yet (license terms?). See {API}/{repo}")
-    paths = [p for p, _, _ in torrent.files_in(data)]
+    try:
+        paths = [p for p, _, _ in torrent.files_in(data)]
+    except torrent.Unsafe as e:
+        raise SeedError(f"Pirate Face's .torrent for {repo} lists paths pf won't write: {e}") from e
     package.check_listing(data, paths)
     mine = weights(src, [str(p.relative_to(src)) for p in Path(src).rglob("*")]) if src else set()
     if mine and not weights(src, paths):
