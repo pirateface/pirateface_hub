@@ -24,3 +24,13 @@ def local_files(data, save_dir):
         if size >= MIN_SIZE and path.is_file() and path.stat().st_size == size:
             found.append((path, str(fs.root(i))))
     return found
+
+
+def biggest_file(data):
+    """The largest non-pad file's size in the torrent; 0 when every file is padding. Under MIN_SIZE, nothing
+    in the torrent is worth a per-file swarm, however the files turn out locally."""
+    fs = lt.torrent_info(data).files()
+    return max(
+        (fs.file_size(i) for i in range(fs.num_files()) if not (fs.file_flags(i) & fs.flag_pad_file)),
+        default=0,
+    )
