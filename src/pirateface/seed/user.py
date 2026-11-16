@@ -46,8 +46,8 @@ def load_key():
     if key:
         return key
     if YES:
-        raise SeedError(f"set PIRATEFACE_KEY (from {API}/account)")
-    print(f"\n==> Your Pirate Face key: {API}/account -> Community torrent key")
+        raise SeedError(f"set PIRATEFACE_KEY (from {API}/settings)")
+    print(f"\n==> Your Pirate Face key: {API}/settings -> Community torrent key")
     key = ask("    Paste it (hidden): ", hidden=True)
     if not key.startswith("pfct_"):
         raise SeedError("that doesn't look like a Pirate Face key (starts with pfct_)")

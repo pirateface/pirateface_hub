@@ -50,7 +50,7 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 
 `pf submit --direct --repo your-org/model FOLDER` publishes your own model that isn't on Hugging Face.
 
-`pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/account](https://pirateface.co/account). Run `pf <command> --help` for every flag.
+`pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). Run `pf <command> --help` for every flag.
 
 ## Settings
 
