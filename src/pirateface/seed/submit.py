@@ -5,7 +5,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
 import urllib.parse
 from pathlib import Path
 
@@ -246,10 +245,9 @@ def submit_new(
     A dry run stops before the torrent client and the POST, and prints what it would send."""
     check_client_version()
     name = name or repo.split("/")[1]
-    # The shared-seeds default is picked after the torrent is built: an old <model> folder that already holds
-    # this same torrent keeps its place (seed/package.py:seeds_folder), so a client seeding it is fine. An
+    # The shared-seeds default keeps each author in their own author--model folder (seed/package.py:seeds_folder
+    # applies the same name; seed_listed reuses an old <model> folder that already holds the torrent). An
     # explicit out is used as given; pf submit's own ./pirateface-NAME default is one.
-    explicit = out is not None
     out = Path(out or Path(SEEDS, repo.replace("/", "--")))
     save_dir = out / "files"
     answers = Answers(dry_run)
@@ -258,15 +256,6 @@ def submit_new(
     trackers = api.trackers(key) if key else api.TRACKERS
 
     paths, sums, data, v1, v2 = build_torrent(src, save_dir, name, trackers)
-    if not explicit:
-        chosen = package.seeds_folder(repo, v1)
-        if Path(SEEDS, chosen) != out:
-            # The old folder already holds this torrent: link into it instead. Only this run's staging is
-            # dropped; nothing that existed before is renamed or deleted.
-            shutil.rmtree(out)
-            out = Path(SEEDS, chosen)
-            save_dir = out / "files"
-            package.stage(src, save_dir / name)
     torrent_path = out / f"{name}.torrent"
     torrent_path.write_bytes(data)
 
