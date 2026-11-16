@@ -51,6 +51,13 @@ def lookup(repo_id, quant=None):
         if e.code == 404:
             return NOT_LISTED
         if e.code in (401, 403):
+            try:
+                json.load(e)  # the site's own licence answers are JSON
+            except Exception:
+                # An HTML 401/403 is a captive portal, proxy or firewall page in front of the site, not a
+                # licence answer: telling the user to accept licence terms would send them to the wrong fix.
+                _mark_down()
+                raise Unreachable(f"could not reach {API}") from e
             return LICENSE_REQUIRED
         if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
             # Rate limiting, a timeout, a redirect loop or a CDN/reverse proxy saying 5xx is an
