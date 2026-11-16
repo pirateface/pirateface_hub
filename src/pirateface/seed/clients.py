@@ -81,6 +81,19 @@ class Transmission:
             self.rpc("torrent-reannounce", {"ids": changed})
         return added, current, skipped, ""
 
+    def torrents_named(self, name):
+        """(save folder, tracker URLs, file paths inside the torrent) of each torrent called name."""
+        fields = ["name", "downloadDir", "trackers", "files"]
+        return [
+            (
+                t["downloadDir"],
+                [x["announce"] for x in t["trackers"]],
+                [f["name"].removeprefix(name + "/") for f in t["files"]],
+            )
+            for t in self.rpc("torrent-get", {"fields": fields})["torrents"]
+            if t["name"] == name
+        ]
+
 
 class QBittorrent:
     name = "qBittorrent"
@@ -109,6 +122,16 @@ class QBittorrent:
 
     def trackers(self, h):
         return [x["url"] for x in json.loads(self.call("torrents/trackers?hash=" + h)) if "://" in x["url"]]
+
+    def torrents_named(self, name):
+        """(save folder, tracker URLs, file paths inside the torrent) of each torrent called name."""
+        found = []
+        for t in self.torrents():
+            if t["name"] == name:
+                files = json.loads(self.call("torrents/files?hash=" + t["hash"]))
+                paths = [f["name"].removeprefix(name + "/") for f in files]
+                found.append((t["save_path"], self.trackers(t["hash"]), paths))
+        return found
 
     def export(self, h):
         """The .torrent file of a torrent in the client (qBittorrent 4.5 or later)."""
