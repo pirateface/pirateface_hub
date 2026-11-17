@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import re
 import sys
@@ -23,6 +24,16 @@ def _max_size(value):
     if size < 0:
         raise argparse.ArgumentTypeError("use a whole number of GiB (0 = no limit)")
     return size
+
+
+def _download_rate(value):
+    try:
+        rate = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("use a positive number of MB/s") from None
+    if not math.isfinite(rate) or rate <= 0:
+        raise argparse.ArgumentTypeError("use a positive number of MB/s")
+    return rate
 
 
 def _index(module, do_sync):
@@ -173,6 +184,12 @@ def _main():
         type=_max_size,
         metavar="GiB",
         help="biggest model to take, in GiB; 0 means any size (default: the server's 500 GiB cap)",
+    )
+    w.add_argument(
+        "--max-download-rate",
+        type=_download_rate,
+        metavar="MB/s",
+        help="maximum Hugging Face download rate in decimal MB/s (default: unlimited)",
     )
     w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(

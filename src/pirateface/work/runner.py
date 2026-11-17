@@ -25,7 +25,7 @@ def _consent():
         raise user.SeedError("not started")
 
 
-def _work_once(key, trackers, name, max_bytes=None):
+def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
     """One job. Returns None if nothing was queued, else True if listed, False if the site refused it."""
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
@@ -59,7 +59,7 @@ def _work_once(key, trackers, name, max_bytes=None):
     # A failed build raises. The failed job's row stays leased to this account until it lapses, so the
     # next lease call gets a different job; the request then goes back to the queue.
     with proofs.sidecar() as blocks:
-        data, manifest, infohash = build.build(job, key, trackers, name, blocks)
+        data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
         if len(data) > MAX_UPLOAD_BYTES:
             raise user.SeedError("the .torrent is over the 3 MB upload limit")
         block_proofs = proofs.answer(key, data, blocks)
@@ -86,10 +86,11 @@ def run(args):
         sys.exit(f"error: {e}")
     trackers = api.trackers(key)
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
+    max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000
     backoff = WORK_BACKOFF_MIN
     while True:
         try:
-            listed = _work_once(key, trackers, args.name, max_bytes)
+            listed = _work_once(key, trackers, args.name, max_bytes, max_download_rate)
         except (WorkUnreachable, Oversize) as e:
             if args.once:
                 sys.exit(f"error: {e}")

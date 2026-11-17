@@ -3,6 +3,7 @@
 import hashlib
 import http.client
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -16,6 +17,28 @@ ATTEMPTS = 3
 # Waiting is the whole answer for these: the same set client/api.py treats as "an outage, not an answer".
 WAIT_FOR = {408, 425, 429, 503}
 MAX_WAIT = 300.0
+
+
+class RateLimiter:
+    """Paces streamed bytes to a shared maximum rate."""
+
+    def __init__(self, bytes_per_second):
+        self.bytes_per_second = bytes_per_second
+        self.started = None
+        self.bytes_read = 0
+        self.lock = threading.Lock()
+
+    def wait(self, count):
+        if self.bytes_per_second is None:
+            return
+        with self.lock:
+            if self.started is None:
+                self.started = time.monotonic()
+            self.bytes_read += count
+            deadline = self.started + self.bytes_read / self.bytes_per_second
+            delay = deadline - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
 
 
 def _wait(error, attempt):
@@ -69,8 +92,9 @@ class Stream:
     16 KiB leaf), hashes what it returns, and reports the total when it ends. A connection that drops
     part way is reopened where it stopped (HTTP Range), so a long job survives a reset."""
 
-    def __init__(self, url, headers, path, on_read, on_end):
+    def __init__(self, url, headers, path, on_read, on_end, rate_limiter=None):
         self.url, self.headers, self.path, self.on_read, self.on_end = url, headers, path, on_read, on_end
+        self.rate_limiter = rate_limiter
         self.sha, self.size, self.ended, self.drops = hashlib.sha256(), 0, False, 0
         self.resp, self.length = _open(url, headers, path)
 
@@ -99,6 +123,8 @@ class Stream:
             if part:
                 buf += part
                 self.drops = 0
+                if self.rate_limiter is not None:
+                    self.rate_limiter.wait(len(part))
                 continue
             at = self.size + len(buf)
             if error is None and (self.length is None or at >= self.length):
@@ -114,7 +140,7 @@ class Stream:
         return bytes(buf)
 
 
-def open_file(repo, revision, path, on_read, on_end):
+def open_file(repo, revision, path, on_read, on_end, rate_limiter=None):
     """A Stream for one file."""
     url = f"{HF}/{repo}/resolve/{urllib.parse.quote(revision)}/{urllib.parse.quote(path)}"
-    return Stream(url, hub.headers(), path, on_read, on_end)
+    return Stream(url, hub.headers(), path, on_read, on_end, rate_limiter)
