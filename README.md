@@ -26,6 +26,7 @@ pf seed org/model [FOLDER] # seed a model, submitting it first if Pirate Face do
 pf submit --repo org/model FOLDER  # package and submit a folder without the seed step (--dry-run to preview)
 pf work                    # build torrents for queued model requests, streamed from Hugging Face
 pf restore PATH            # upload .torrent files to fix a listing whose magnet stalls
+pf index [--sync]          # the cached magnet index: what it holds, and mirror the newest build
 ```
 
 More `pf seed` options:
@@ -51,6 +52,28 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 `pf submit --direct --repo your-org/model FOLDER` publishes your own model that isn't on Hugging Face.
 
 `pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). Run `pf <command> --help` for every flag.
+
+## When Pirate Face is down
+
+The site's magnet index lists every model's magnet as a weekly torrent of shards, and pf keeps a copy of
+those shards in `$PF_CACHE/index/shards/`. When Pirate Face can't be reached, a model in that copy still
+downloads from its swarm:
+
+```
+file    tokenizer.json  0.7 MB  from the index (build 2026-11-09), fingerprint matches Hugging Face
+```
+
+The bytes are checked against the Hugging Face fingerprint the download already holds. libtorrent hashes
+every piece before it counts it as downloaded, and nothing is moved into the cache unless the whole file
+matches that fingerprint.
+A model the copy doesn't list, a torrent that carries only some of a repo's files, a removals list that
+can't be read, or a download with no fingerprint: that file comes from Hugging Face as usual, and the
+reason is printed.
+
+```sh
+pf index          # the build this copy holds, how many models, and whether the site has a newer one
+pf index --sync   # mirror the build the site names, replacing copies the build has changed
+```
 
 ## Settings
 

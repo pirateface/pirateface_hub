@@ -37,6 +37,10 @@ class Unsafe(Unavailable):
     name this OS cannot store."""
 
 
+class NotInTorrent(Unavailable):
+    """The torrent's file list does not include this file: the swarm carries only part of the repo."""
+
+
 def _get_session():
     global _session
     if _session is None:
@@ -168,14 +172,18 @@ def _lookup_magnet(repo_id):
     return magnet
 
 
-def _torrent_params(repo_id, magnet, resume):
+def _torrent_params(repo_id, magnet, resume, cache_list=True):
     """(params, saved): add_torrent params with the cached file list and any resume data folded in, and
-    the .torrent path the file list is cached to (a magnet alone needs a live peer to get it)."""
+    the .torrent path the file list is cached to (a magnet alone needs a live peer to get it).
+
+    cache_list is False when the caller supplied the magnet: the site it would ask is exactly what may be
+    unreachable on that path, and the magnet is authoritative.
+    """
     atp = lt.parse_magnet_uri(magnet)
     atp.save_path = str(CACHE_DIR)
     atp.flags |= lt.torrent_flags.default_dont_download
     saved = CACHE_DIR / "torrents" / f"{atp.info_hashes.v1}.torrent"
-    if not saved.exists():
+    if not saved.exists() and cache_list:
         _save_torrent_file(repo_id, saved, str(atp.info_hashes.v1))
     if saved.exists():
         atp.ti = lt.torrent_info(str(saved))
@@ -220,19 +228,34 @@ def _cache_file_list(saved, h):
         saved.write_bytes(lt.bencode({"info": lt.bdecode(h.torrent_file().info_section())}))
 
 
-def _handle(repo_id, resume=None):
+def _handle(repo_id, resume=None, magnet=None, where=None):
     """The repo's handle, adding the torrent the first time. Callers hold the repo's _setup_lock, so only the
     shared dicts need _lock: the site lookup and the metadata wait run without it, so one repo waiting for its
-    file list doesn't hold up every other repo's downloads and status lines."""
+    file list doesn't hold up every other repo's downloads and status lines.
+
+    `magnet` joins that swarm instead of asking the site which one belongs to the repo: that is the
+    cached-index path, where the site is what cannot be reached. One repo id is not one swarm -- revisions
+    and quants are separate torrents -- so a handle already open is reused only if it is that swarm.
+    `where` is the provenance appended to the swarm line -- "the cached index" when the file list came
+    from the cache instead of the site.
+    """
+    from_index = magnet is not None
     cached = _remembered(repo_id)
     if cached is not _NOT_CACHED:
         if isinstance(cached, Unsafe):
-            raise Unavailable(str(cached))
-        return cached
-    magnet = _lookup_magnet(repo_id)
+            raise Unavailable(str(cached))  # a listing this client refused: same answer for every file
+        if cached is None:
+            if magnet is None:
+                return None  # remembered "not on Pirate Face": an answer about the API, not the index
+        elif magnet is None or str(cached.info_hashes().v1) == str(lt.parse_magnet_uri(magnet).info_hashes.v1):
+            return cached
+        else:
+            raise Unavailable("a different torrent for this repo is already open")
     if magnet is None:
-        return None
-    atp, saved = _torrent_params(repo_id, magnet, resume)
+        magnet = _lookup_magnet(repo_id)
+        if magnet is None:
+            return None
+    atp, saved = _torrent_params(repo_id, magnet, resume, cache_list=not from_index)
     h = _get_session().add_torrent(atp)
     _wait_for_metadata(repo_id, h)
     _check_listing(repo_id, h, saved)
@@ -241,7 +264,9 @@ def _handle(repo_id, resume=None):
     threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
     fs = h.torrent_file().files()
     real = [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
-    ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real))
+    if where is None:
+        where = "the cached index" if from_index else "Pirate Face"
+    ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real), where)
     return h
 
 
@@ -312,24 +337,49 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
             return
 
 
+def _relative(ti, i):
+    """The entry's path inside the torrent's folder (libtorrent prefixes the torrent name, and on Windows
+    returns backslashes). The single place a torrent path becomes a relative one."""
+    fs = ti.files()
+    path = fs.file_path(i).replace(os.sep, "/")
+    return path.split("/", 1)[1] if fs.num_files() > 1 and "/" in path else path
+
+
 def _file_index(ti, filename):
     fs = ti.files()
     for i in range(fs.num_files()):
-        path = fs.file_path(i).replace(os.sep, "/")
-        rel = path.split("/", 1)[1] if fs.num_files() > 1 and "/" in path else path
-        if rel == filename:
+        if _relative(ti, i) == filename:
             return i
     return None
 
 
-def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
+def swarm_files(repo_id, magnet=None, where=None):
+    """(path, size) for each real file in the repo's torrent, BEP 47 pad files left out.
+
+    Opens (or reuses) the handle, so this is how a caller finds out what a swarm actually carries before
+    promising a download from it: a repo can be in the index while its torrent holds only some files.
+    """
+    with _setup_lock(repo_id):
+        h = _handle(repo_id, magnet=magnet, where=where)
+        if h is None:
+            raise Unavailable()
+        ti = h.torrent_file()
+        fs = ti.files()
+        files = []
+        for i in range(fs.num_files()):
+            if not fs.file_flags(i) & fs.flag_pad_file:
+                files.append((_relative(ti, i), fs.file_size(i)))
+        return files
+
+
+def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=None):
     counted = False
     h = None
     ti = None
     i = None
     try:
         with _setup_lock(repo_id):
-            h = _handle(repo_id)
+            h = _handle(repo_id, magnet=magnet)
             if h is None:
                 raise Unavailable()
             # A model download fetches files one at a time. After the last wanted file
@@ -356,14 +406,14 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT):
                     with contextlib.suppress(Exception):
                         _get_session().remove_torrent(h)
                     _handles.pop(repo_id, None)
-                h = _handle(repo_id, resume)
+                h = _handle(repo_id, resume, magnet=magnet)
                 if h is None:
                     raise Unavailable()
 
             ti = h.torrent_file()
             i = _file_index(ti, filename)
             if i is None:
-                raise Unavailable("not in the torrent")
+                raise NotInTorrent("not in the torrent")
             size = ti.files().file_size(i)
             path = Path(h.status().save_path) / ti.files().file_path(i)
             # Set all priorities in one call (all-skipped for a moment drops the web seed), from our own set:

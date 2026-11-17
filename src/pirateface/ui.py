@@ -76,12 +76,13 @@ def mb(n):
     return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} kB"
 
 
-def banner(repo_id, files, size):
+def banner(repo_id, files, size, where="Pirate Face"):
+    """`where` is where the file list came from: the site, or the cached index while it is down."""
     with _lock:
         if repo_id in _announced:
             return
         _announced.add(repo_id)
-    note("swarm", f"{repo_id}  {files} files, {mb(size)}")
+    note("swarm", f"{repo_id}  {files} files, {mb(size)}" + ("" if where == "Pirate Face" else f"  · {where}"))
 
 
 def not_on_pirateface(repo_id, rescue_requested=False):
@@ -127,6 +128,13 @@ def from_swarm(filename, size, checked_by="Hugging Face"):
     with _lock:
         _download_counts["swarm"] += 1
     note("file", f"{filename}  {mb(size)}  fingerprint matches {checked_by}")
+
+
+def from_index(filename, size, build):
+    """A file from the swarm the cached index names, checked against the fingerprint the download held."""
+    with _lock:
+        _download_counts["swarm"] += 1
+    note("file", f"{filename}  {mb(size)}  from the index (build {build}), fingerprint matches Hugging Face")
 
 
 def from_hf(filename, reason=None):
