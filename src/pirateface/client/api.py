@@ -75,13 +75,13 @@ def _site_answer(fetch):
     return answer
 
 
-def _get(url, timeout, limit=None):
+def _get(url, timeout, limit=None, headers=None):
     """(HTTP status, body) of the site's answer at url; an error answer's body is b"" if it can't be read.
 
     Raises Unreachable when there is no answer: no connection, or rate limiting, a timeout, a redirect loop
     or a 5xx from a CDN or reverse proxy in front of the site."""
     try:
-        with request(url, timeout) as r:
+        with request(url, timeout, headers=headers) as r:
             return r.status, r.read(limit)
     except urllib.error.HTTPError as e:
         if e.code in (408, 425, 429) or 300 <= e.code < 400 or e.code >= 500:
@@ -92,6 +92,16 @@ def _get(url, timeout, limit=None):
     with contextlib.suppress(Exception):
         return error.code, error.read(limit)
     return error.code, b""
+
+
+def _get_json(path, timeout, key=None, parse=json.loads):
+    """parse(body) of the site's 2xx answer at path, sent as this account when key is given; None for no answer,
+    an error status, or a body parse() rejects."""
+    headers = None if key is None else {"Authorization": f"Bearer {key}"}
+    with contextlib.suppress(Exception):
+        status, body = _get(f"{API}{path}", timeout, headers=headers)
+        return parse(body) if status < 400 else None
+    return None
 
 
 def _torrent(path):
@@ -214,11 +224,7 @@ TRACKERS = ["udp://tracker.pirateface.co:6969/announce", "http://tracker.piratef
 
 def trackers(key):
     """Public trackers plus, last, this account's seeding tracker (from the site, so changes need no release)."""
-    try:
-        with request(f"{API}/api/trackers", 15, headers={"Authorization": f"Bearer {key}"}) as r:
-            lines = r.read().decode().split()
-    except Exception:
-        return TRACKERS
+    lines = _get_json("/api/trackers", 15, key, parse=lambda body: body.decode().split()) or []
     return [t for t in lines if t.startswith(("udp://", "http://", "https://"))] or TRACKERS
 
 
@@ -234,11 +240,8 @@ VERSION = version("pirateface")
 
 def min_client_version():
     """The oldest pirateface Pirate Face takes submissions from (GET /api/cli), or None if it doesn't say."""
-    try:
-        with request(f"{API}/api/cli", 15) as r:
-            minimum = json.load(r).get("minVersion")
-    except Exception:
-        return None  # an older site without /api/cli, or offline: the submission itself will say
+    answer = _get_json("/api/cli", 15)  # None from an older site without /api/cli, or offline
+    minimum = answer.get("minVersion") if isinstance(answer, dict) else None
     return minimum if isinstance(minimum, str) and re.fullmatch(r"\d+(\.\d+)*", minimum) else None
 
 
@@ -276,21 +279,14 @@ def upgrade(key, body):
 
 def torrent_status(infohash):
     """Pirate Face's record of a torrent by v1 infohash ({infohash, repo, status, supersededBy}), or None."""
-    try:
-        with request(f"{API}/api/torrents/{infohash}", 15) as r:
-            return json.load(r)
-    except Exception:
-        return None
+    return _get_json(f"/api/torrents/{infohash}", 15)
 
 
 def my_torrents(key):
     """This account's listed v1-only torrents as [{repo, infohash}], for pf seed --upgrade --mine.
     None if the site did not answer (key rejected or unreachable)."""
-    try:
-        with request(f"{API}/api/torrents?mine=1", 30, headers={"Authorization": f"Bearer {key}"}) as r:
-            return json.load(r).get("torrents")
-    except Exception:
-        return None
+    answer = _get_json("/api/torrents?mine=1", 30, key)
+    return answer.get("torrents") if isinstance(answer, dict) else None
 
 
 def restore(key, data):
