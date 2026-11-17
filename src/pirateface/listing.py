@@ -6,6 +6,7 @@ A listed path is written under a folder: the torrent's own folder in the downloa
 
 import os
 import re
+from pathlib import PurePosixPath
 
 import libtorrent as lt
 
@@ -27,12 +28,31 @@ def unsafe_path(rel, windows=True):
     return None
 
 
+def collisions(paths):
+    """Paths that would land on one file: one name once case is folded, or a file that is also a folder."""
+    files = {}
+    for p in paths:
+        if (first := files.setdefault(p.casefold(), p)) != p:
+            yield f"{first} and {p}: one name once case is folded"
+    for p in files.values():
+        for folder in PurePosixPath(p).parents:
+            if folder == PurePosixPath("."):  # the root: not a folder any listing can name
+                break
+            if file := files.get(str(folder).casefold()):
+                yield f"{file} and {p}: one is a file, the other is a folder"
+                break
+
+
 def info_problems(info, paths):
     """Why this torrent's info dict and its paths (see torrent.files_in) can't be written under a folder as-is,
     or []. Windows-only names are refused on Windows only: a listing that is already published stays usable
-    where the names are legal."""
+    where the names are legal. Case-folded collisions are refused even where this disk can store both files:
+    see `collisions` for which pairs.
+    """
     windows = os.name == "nt"
+    paths = list(paths)  # read twice below, and by the caller's iterator otherwise
     problems = [why for p in paths if (why := unsafe_path(p, windows=windows))]
+    problems += collisions(paths)
     problems += [
         "/".join(p.decode(errors="replace") for p in f[b"path"]) + ": a symlink"
         for f in info.get(b"files") or []
