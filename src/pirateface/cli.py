@@ -46,6 +46,9 @@ def _main():
             "  pf restore PATH              put a .torrent back on a listing"
         ),
     )
+    from pirateface.client.api import VERSION
+
+    p.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     sub = p.add_subparsers(dest="cmd", required=True, title="commands")
     d = sub.add_parser("download", help="get a model into the Hugging Face cache")
     d.add_argument("repo_id")
