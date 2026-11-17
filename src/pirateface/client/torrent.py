@@ -260,6 +260,7 @@ def _handle(repo_id, resume=None, magnet=None, where=None):
     _wait_for_metadata(repo_id, h)
     _check_listing(repo_id, h, saved)
     _cache_file_list(saved, h)
+    _choose_by_piece(h)
     _remember(repo_id, h)
     threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
     fs = h.torrent_file().files()
@@ -268,6 +269,31 @@ def _handle(repo_id, resume=None, magnet=None, where=None):
         where = "the cached index" if from_index else "Pirate Face"
     ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real), where)
     return h
+
+
+def _choose_by_piece(h):
+    """Turn every file on, then choose what to download per piece. A file at priority 0 has its share of a
+    piece parked in libtorrent's part file, and switching that file on while the piece is half-downloaded
+    fails with "file too short" and stops the torrent. Nothing is downloaded yet, so this switch is safe."""
+    h.prioritize_files([4] * h.torrent_file().num_files())
+    # Applied all at once by a disk job, which then resets piece priorities; pad files stay at 0.
+    deadline = time.monotonic() + config.METADATA_TIMEOUT
+    while 4 not in h.get_file_priorities():
+        if time.monotonic() > deadline:
+            raise TimeoutError("libtorrent didn't apply the file priorities")
+        time.sleep(0.05)
+    h.prioritize_pieces([0] * h.torrent_file().num_pieces())
+
+
+def _pieces_for(ti, files):
+    """Piece priorities that download exactly the pieces these files touch."""
+    fs, length = ti.files(), ti.piece_length()
+    prio = [0] * ti.num_pieces()
+    for f in files:
+        start, size = fs.file_offset(f), fs.file_size(f)
+        for p in range(start // length, (start + size - 1) // length + 1 if size else 0):
+            prio[p] = 4
+    return prio
 
 
 def _save_torrent_file(repo_id, saved, infohash):
@@ -422,7 +448,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
             with _lock:
                 wanted = _wanted.setdefault(repo_id, set())
                 wanted.add(i)
-                h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+                h.prioritize_pieces(_pieces_for(ti, wanted))
                 # Counted only after the priorities are in place: an exception above
                 # must not leave a phantom in-flight fetch behind.
                 _active[repo_id] = _active.get(repo_id, 0) + 1
@@ -452,7 +478,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
                 if wanted is not None and i in wanted and _active.get(repo_id, 0) <= 1:
                     wanted.discard(i)
                     with contextlib.suppress(Exception):
-                        h.prioritize_files([4 if f in wanted else 0 for f in range(ti.num_files())])
+                        h.prioritize_pieces(_pieces_for(ti, wanted))
         raise
     finally:
         if counted:
