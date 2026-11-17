@@ -130,11 +130,14 @@ def from_swarm(filename, size, checked_by="Hugging Face"):
     note("file", f"{filename}  {mb(size)}  fingerprint matches {checked_by}")
 
 
-def from_index(filename, size, build):
-    """A file from the swarm the cached index names, checked against the fingerprint the download held."""
+def from_index(filename, size, build, checked_by="Hugging Face"):
+    """A file from the swarm the cached index names, and what its bytes were checked against."""
     with _lock:
         _download_counts["swarm"] += 1
-    note("file", f"{filename}  {mb(size)}  from the index (build {build}), fingerprint matches Hugging Face")
+    if checked_by == "Hugging Face":
+        note("file", f"{filename}  {mb(size)}  from the index (build {build}), fingerprint matches Hugging Face")
+    else:
+        note("file", f"{filename}  {mb(size)}  from the index (build {build}), checked against {checked_by}")
 
 
 def from_hf(filename, reason=None):
