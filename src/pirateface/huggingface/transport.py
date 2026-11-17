@@ -88,7 +88,8 @@ def _wrap(http):
                     if find is listing and repo not in _announced:
                         _announced.add(repo)
                         ui.note(
-                            "hf", f"{repo}  Hugging Face did not answer: revision and file list from {found['trust']}"
+                            "hf",
+                            f"{repo}  Hugging Face did not answer: commit {found['commit'][:12]} and its files from {found['trust']}",
                         )
                     status, headers, body = answer(found, request.method, *rest)
                     if pattern is RESOLVE and status < 400:
