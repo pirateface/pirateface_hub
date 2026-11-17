@@ -1,5 +1,6 @@
 import atexit
 import contextlib
+import enum
 import os
 import shutil
 import sys
@@ -18,8 +19,7 @@ from pirateface.listing import info_problems, unsafe_path
 CACHE_DIR = Path(config.CACHE_DIR)
 _lock = threading.Lock()
 _session = None
-_handles = {}  # repo_id -> handle, or None if not on Pirate Face
-_NOT_CACHED = object()  # _handles.get() sentinel: a remembered None means "not on Pirate Face"
+_handles = {}  # repo_id -> its RepoState once asked: a torrent handle, NO_SWARM, or the Unsafe that refused it
 _wanted = {}
 _active = {}  # repo_id -> fetch_file calls currently downloading
 _setup = {}  # repo_id -> lock serialising handle setup
@@ -30,6 +30,13 @@ _idle_cv = threading.Condition(_lock)  # signalled when a repo's in-flight fetch
 
 class Unavailable(Exception):
     pass
+
+
+class RepoState(enum.Enum):
+    """A repo's _handles state other than its torrent handle or the Unsafe that refused its listing."""
+
+    UNASKED = "the site was never asked about the repo"
+    NO_SWARM = "not listed, no usable answer, or no file list in time: Hugging Face serves it"
 
 
 class Unsafe(Unavailable):
@@ -96,7 +103,7 @@ def _cleanup():
     if not _lock.acquire(timeout=1):
         return
     try:
-        handles = [h for h in _handles.values() if h is not None]
+        handles = [h for h in _handles.values() if isinstance(h, lt.torrent_handle)]
     finally:
         _lock.release()
     for h in handles:
@@ -136,39 +143,29 @@ def _setup_lock(repo_id):
 
 
 def _remembered(repo_id):
-    """The repo's remembered handle, or _NOT_CACHED if the site was never asked about this repo.
-
-    A remembered None means "not on Pirate Face"; a remembered Unsafe means its listing was refused, and
-    carries the reason for every later file of the same repo."""
     with _lock:
-        return _handles.get(repo_id, _NOT_CACHED)
+        return _handles.get(repo_id, RepoState.UNASKED)
 
 
-def _remember(repo_id, handle):
-    """Remember the repo's handle, None for "not on Pirate Face", or the Unsafe that refused its listing --
-    one map says what happened to a repo, so nothing has to be kept in step with it."""
+def _remember(repo_id, state):
+    """One map says what happened to a repo, so nothing has to be kept in step with it."""
     with _lock:
-        _handles[repo_id] = handle
+        _handles[repo_id] = state
 
 
 def _lookup_magnet(repo_id):
-    """The repo's magnet, or None to fall back on Hugging Face. A None is remembered so the site is
+    """The repo's magnet, or None to fall back on Hugging Face. NO_SWARM is remembered so the site is
     asked once per process; an unreachable site raises instead, so it is retried next time."""
     try:
-        magnet = api.lookup_magnet(repo_id)
+        entry = api.lookup(repo_id)
     except api.Unreachable as e:
-        # Don't cache this as "not on Pirate Face": the site may be back next time.
         raise Unavailable("Pirate Face unreachable") from e
-    if magnet is api.NOT_LISTED:
-        ui.not_on_pirateface(repo_id, api.request_rescue(repo_id))
-        _remember(repo_id, None)
-        return None
-    if magnet is api.LICENSE_REQUIRED:
+    if entry is api.LICENSE_REQUIRED:
         raise Unavailable(f"accept the license terms at {config.API}/{repo_id}")
+    magnet = entry.get("magnet") if isinstance(entry, dict) else None
     if not magnet:
-        ui.not_on_pirateface(repo_id)
-        _remember(repo_id, None)
-        return None
+        ui.not_on_pirateface(repo_id, entry is api.NOT_LISTED and api.request_rescue(repo_id))
+        _remember(repo_id, RepoState.NO_SWARM)
     return magnet
 
 
@@ -201,7 +198,7 @@ def _wait_for_metadata(repo_id, h):
     while not h.status().has_metadata:
         if time.monotonic() > deadline:
             _get_session().remove_torrent(h)
-            _remember(repo_id, None)
+            _remember(repo_id, RepoState.NO_SWARM)
             raise TimeoutError("no peer sent the file list in time")
         time.sleep(0.2)
 
@@ -240,16 +237,14 @@ def _handle(repo_id, resume=None, magnet=None, where=None):
     from the cache instead of the site.
     """
     from_index = magnet is not None
-    cached = _remembered(repo_id)
-    if cached is not _NOT_CACHED:
-        if isinstance(cached, Unsafe):
-            raise Unavailable(str(cached))  # a listing this client refused: same answer for every file
-        if cached is None:
-            if magnet is None:
-                return None  # remembered "not on Pirate Face": an answer about the API, not the index
-        elif magnet is None or str(cached.info_hashes().v1) == str(lt.parse_magnet_uri(magnet).info_hashes.v1):
-            return cached
-        else:
+    match _remembered(repo_id):
+        case Unsafe() as refused:
+            raise Unavailable(str(refused))  # a listing this client refused: same answer for every file
+        case RepoState.NO_SWARM if magnet is None:
+            return None  # an answer about the API, not the index: a magnet still joins its swarm
+        case lt.torrent_handle() as h:
+            if magnet is None or str(h.info_hashes().v1) == str(lt.parse_magnet_uri(magnet).info_hashes.v1):
+                return h
             raise Unavailable("a different torrent for this repo is already open")
     if magnet is None:
         magnet = _lookup_magnet(repo_id)
