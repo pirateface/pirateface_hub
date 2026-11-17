@@ -27,7 +27,6 @@ class Candidate:
     quant: str | None
     name: str
     v1: str
-    v2: str | None
     single: bool
     data: bytes
     files: dict[str, Path]
@@ -56,19 +55,13 @@ def _huggingface_cache():
         repo = repo_dir.name.removeprefix("models--").replace("--", "/", 1)
         blob_dir = repo_dir / "blobs"
         if blob_dir.is_dir():
+            # A repo blob is named by its SHA-256. Since huggingface_hub 1.32 it is a link into a shared
+            # store named by Xet hash, so the key is the link's own name, not its target's.
             for blob in blob_dir.iterdir():
-                cached = _cached_file(blob)
-                if cached:
-                    blobs.setdefault(cached[0], cached[1])
+                if SHA256.fullmatch(blob.name) and blob.is_file():
+                    blobs.setdefault(blob.name.lower(), blob.resolve())
         for snapshot in sorted((repo_dir / "snapshots").glob("*")):
             snapshots.setdefault(repo, {})[snapshot.name] = snapshot
-            for directory, dirs, files in os.walk(snapshot, followlinks=False):
-                base = Path(directory)
-                dirs[:] = [name for name in dirs if not (base / name).is_symlink()]
-                for filename in files:
-                    cached = _cached_file(base / filename)
-                    if cached:
-                        blobs.setdefault(cached[0], cached[1])
     return snapshots, blobs, root
 
 
@@ -147,7 +140,7 @@ def _source_for(path, digest, size, blobs, snapshots):
         return source
     for snapshot in snapshots:
         source = snapshot / PurePosixPath(path)
-        if source.is_file() and not source.is_dir() and source.stat().st_size == size:
+        if source.is_file() and source.stat().st_size == size:
             cached = _cached_file(source)
             if cached:
                 if cached[0] == digest:
@@ -169,7 +162,7 @@ def _candidate(repo, quant, entry, data, blobs, snapshots):
     payload = torrent.files_in(data)
     if not payload:
         return None
-    name, v1, v2, single = package.info(data)
+    name, v1, _, single = package.info(data)
     v1 = v1.lower()
     if v1 == "0" * 40:
         return None
@@ -200,7 +193,6 @@ def _candidate(repo, quant, entry, data, blobs, snapshots):
         quant=quant,
         name=name,
         v1=v1,
-        v2=v2,
         single=single,
         data=data,
         files=files,
@@ -239,52 +231,22 @@ def _listings(repos, blobs, snapshots):
     return sorted(found.values(), key=lambda item: (item.repo.casefold(), item.quant or ""))
 
 
-def _link_cached_files(files, destination):
-    destination = Path(destination)
-    for directory in reversed((destination, *destination.parents)):
-        if directory.is_symlink():
-            raise package.LinkError(f"staging path contains a symlink: {directory}")
-        if directory.exists() and not directory.is_dir():
-            raise package.LinkError(f"staging path is not a directory: {directory}")
-        directory.mkdir(exist_ok=True)
-    for relative, source in sorted(files.items()):
-        source = Path(source).resolve()
-        if not source.is_file():
-            raise package.LinkError(f"cached file is missing: {source}")
-        if source.is_relative_to(destination.resolve()):
-            raise package.LinkError(f"cache source is inside the staging folder: {source}")
-        parent = destination
-        for part in PurePosixPath(relative).parts[:-1]:
-            parent /= part
-            if parent.is_symlink():
-                raise package.LinkError(f"staging path contains a symlink: {parent}")
-            parent.mkdir(exist_ok=True)
-        target = parent / PurePosixPath(relative).name
-        if target.is_symlink():
-            if target.resolve() == source:
-                continue
-            raise package.LinkError(f"staging file already exists and is a different symlink: {target}")
-        if target.exists():
-            if target.samefile(source):
-                continue
-            raise package.LinkError(f"staging file already exists and is not the cache source: {target}")
-        package.link(source, target)
-
-
 def _seed(candidate, qbt, trackers, per_file):
     data = package.with_trackers(candidate.data, trackers)
     out = Path(SEEDS, "matches", candidate.v1)
     save_dir = out / "files"
     destination = save_dir if candidate.single else save_dir / candidate.name
+    if qbt.has(candidate.v1):
+        print(f"    Already in qBittorrent: {candidate.repo}")
+        return
     try:
-        _link_cached_files(candidate.files, destination)
+        package.clear_links(destination)
+        for relative, source in candidate.files.items():
+            package.link(source, destination / relative)
         status = qbt.add_paused_and_recheck(data, save_dir, candidate.v1)
     except Exception:
         package.clear_links(destination)
         raise
-    if status == "already":
-        print(f"    Already in qBittorrent: {candidate.repo}; staged cache links were left in place.")
-        return
     if status == "incomplete":
         package.clear_links(destination)
         print("    qBittorrent's recheck was below 100%; removed the torrent and kept it off the cache files.")
