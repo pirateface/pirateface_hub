@@ -205,8 +205,8 @@ def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path, proof=
     5. You agree to the Terms ({API}/terms#model-torrent-submissions) and Listing policy ({API}/policy).""")
     if not user.YES and user.ask("    Type yes: ") != "yes":
         raise SeedError(f"not submitted. Your torrent is in {out}; rerun any time")
-    if proof and (block_proofs := proof()):
-        body["blockProofs"] = block_proofs
+    if proof:
+        body |= proof()
 
     code, answer = api.submit(key, body)
     result = answer.get("status") or answer.get("error") or answer
