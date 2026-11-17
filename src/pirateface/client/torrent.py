@@ -395,9 +395,6 @@ def swarm_files(repo_id, magnet=None, where=None):
 
 def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=None):
     counted = False
-    h = None
-    ti = None
-    i = None
     try:
         with _setup_lock(repo_id):
             h = _handle(repo_id, magnet=magnet)
@@ -418,18 +415,15 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
                 with _idle_cv:
                     while _active.get(repo_id):
                         _idle_cv.wait(5)
-                idle = True
-            else:
-                idle = False
-            if idle and h.status().state == lt.torrent_status.finished:
-                resume = _resume_data(h)
-                with _lock:
-                    with contextlib.suppress(Exception):
-                        _get_session().remove_torrent(h)
-                    _handles.pop(repo_id, None)
-                h = _handle(repo_id, resume, magnet=magnet)
-                if h is None:
-                    raise Unavailable()
+                if h.status().state == lt.torrent_status.finished:  # still: no other fetch revived it meanwhile
+                    resume = _resume_data(h)
+                    with _lock:
+                        with contextlib.suppress(Exception):
+                            _get_session().remove_torrent(h)
+                        _handles.pop(repo_id, None)
+                    h = _handle(repo_id, resume, magnet=magnet)
+                    if h is None:
+                        raise Unavailable()
 
             ti = h.torrent_file()
             i = _file_index(ti, filename)
@@ -469,7 +463,7 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
     except BaseException:
         # A failed fetch must not leave its file wanted forever: at priority 4 the
         # torrent never reaches "finished" again, which would disable the re-add path.
-        if counted and h is not None and ti is not None and i is not None:
+        if counted:  # set only once h, ti and i exist
             with _idle_cv:
                 wanted = _wanted.get(repo_id)
                 if wanted is not None and i in wanted and _active.get(repo_id, 0) <= 1:
