@@ -1,7 +1,6 @@
 """The user's torrent client: Transmission (RPC) or qBittorrent (Web UI)."""
 
 import base64
-import contextlib
 import http.cookiejar
 import json
 import os
@@ -254,13 +253,20 @@ def _connect(client):
 
 def add(data, save_dir, v1, prefer=None):
     """Add the torrent to the first client that answers, trying a running client of class prefer first.
-    Returns what happened, or None if none could."""
+    Returns what happened, or None if none could. A client that answered but refused names it and why."""
+    errors = []
     for client in sorted(running(), key=lambda c: not (prefer and isinstance(c, prefer))):
-        with contextlib.suppress(Exception):
+        try:
             if client.has(v1):
                 return f"Already in {client.name}."
             client.add(data, save_dir)
             return f"Added to {client.name} with the files in {save_dir}. It checks them, then seeds."
+        except Exception as e:
+            errors.append(f"{client.name} refused it: {e}")
+    if errors:
+        from pirateface.seed import user  # user imports this module
+
+        raise user.SeedError("; ".join(errors))
     return None
 
 

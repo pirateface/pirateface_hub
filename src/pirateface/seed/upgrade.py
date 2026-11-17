@@ -125,7 +125,7 @@ def upgrade_mine():
     for row in mine:
         try:
             results.append(upgrade_one(qbt, key, row["repo"], row["infohash"], report=False))
-        except SeedError as e:
+        except Exception as e:  # one client error must not stop the rest of the batch
             problems.append(f"{row['repo']}: {e}")
     upgraded = [r for r in results if r is not None]
     done, already = len(upgraded), len(results) - len(upgraded)
