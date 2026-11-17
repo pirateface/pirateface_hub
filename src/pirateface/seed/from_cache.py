@@ -1,6 +1,5 @@
 """Seed listed model torrents from content-addressed Hugging Face and Ollama caches."""
 
-import contextlib
 import functools
 import hashlib
 import json
@@ -130,18 +129,13 @@ def _repos_from_search(text):
 
 def _search_ollama(queries):
     repos = set()
-    failed = False
     for query in tqdm(sorted(queries, key=str.casefold), desc="Searching Ollama model names", unit="model"):
-        try:
-            result = api.search_models(query)
-        except api.Unreachable:
-            failed = True
-            break
+        result = api.search_models(query)
         if result is None:
-            failed = True
+            print("Ollama name search failed; continuing with matches found so far.", file=sys.stderr)
             break
         repos.update(_repos_from_search(result))
-    return repos, failed
+    return repos
 
 
 def _source_for(path, digest, size, blobs, snapshots):
@@ -238,7 +232,7 @@ def _listings(repos, blobs, snapshots):
                 continue
             try:
                 candidate = _candidate(repo, quant, entry, data, blobs, snapshots)
-            except (KeyError, OSError, TypeError, ValueError, UnicodeError, RuntimeError, torrent.Unsafe):
+            except torrent.Unsafe:
                 continue
             if candidate:
                 found.setdefault(candidate.v1, candidate)
@@ -247,52 +241,34 @@ def _listings(repos, blobs, snapshots):
 
 def _link_cached_files(files, destination):
     destination = Path(destination)
-    created = []
     for directory in reversed((destination, *destination.parents)):
         if directory.is_symlink():
             raise package.LinkError(f"staging path contains a symlink: {directory}")
         if directory.exists() and not directory.is_dir():
             raise package.LinkError(f"staging path is not a directory: {directory}")
         directory.mkdir(exist_ok=True)
-    try:
-        for relative, source in sorted(files.items()):
-            source = Path(source).resolve()
-            if not source.is_file():
-                raise package.LinkError(f"cached file is missing: {source}")
-            if source.is_relative_to(destination.resolve()):
-                raise package.LinkError(f"cache source is inside the staging folder: {source}")
-            parent = destination
-            for part in PurePosixPath(relative).parts[:-1]:
-                parent /= part
-                if parent.is_symlink():
-                    raise package.LinkError(f"staging path contains a symlink: {parent}")
-                parent.mkdir(exist_ok=True)
-            target = parent / PurePosixPath(relative).name
-            if target.is_symlink():
-                if target.resolve() == source:
-                    continue
-                raise package.LinkError(f"staging file already exists and is a different symlink: {target}")
-            elif target.exists():
-                if target.samefile(source):
-                    continue
-                raise package.LinkError(f"staging file already exists and is not the cache source: {target}")
-            try:
-                target.symlink_to(source)
-                created.append(target)
-            except OSError as error:
-                hint = " On Windows, enable Developer Mode to create symlinks." if os.name == "nt" else ""
-                raise package.LinkError(f"could not link cached file {source} to {target}.{hint}") from error
-    except Exception:
-        _remove_created_links(created)
-        raise
-    return created
-
-
-def _remove_created_links(paths):
-    for path in paths:
-        if path.is_symlink():
-            with contextlib.suppress(OSError):
-                path.unlink()
+    for relative, source in sorted(files.items()):
+        source = Path(source).resolve()
+        if not source.is_file():
+            raise package.LinkError(f"cached file is missing: {source}")
+        if source.is_relative_to(destination.resolve()):
+            raise package.LinkError(f"cache source is inside the staging folder: {source}")
+        parent = destination
+        for part in PurePosixPath(relative).parts[:-1]:
+            parent /= part
+            if parent.is_symlink():
+                raise package.LinkError(f"staging path contains a symlink: {parent}")
+            parent.mkdir(exist_ok=True)
+        target = parent / PurePosixPath(relative).name
+        if target.is_symlink():
+            if target.resolve() == source:
+                continue
+            raise package.LinkError(f"staging file already exists and is a different symlink: {target}")
+        if target.exists():
+            if target.samefile(source):
+                continue
+            raise package.LinkError(f"staging file already exists and is not the cache source: {target}")
+        package.link(source, target)
 
 
 def _seed(candidate, qbt, trackers, per_file):
@@ -300,21 +276,17 @@ def _seed(candidate, qbt, trackers, per_file):
     out = Path(SEEDS, "matches", candidate.v1)
     save_dir = out / "files"
     destination = save_dir if candidate.single else save_dir / candidate.name
-    if qbt.has(candidate.v1):
-        print(f"    Already in qBittorrent: {candidate.repo}.")
-        return
-    created = _link_cached_files(candidate.files, destination)
     try:
+        _link_cached_files(candidate.files, destination)
         status = qbt.add_paused_and_recheck(data, save_dir, candidate.v1)
     except Exception:
-        _remove_created_links(created)
+        package.clear_links(destination)
         raise
     if status == "already":
-        # A concurrent add may already be using these paths; preserve them.
         print(f"    Already in qBittorrent: {candidate.repo}; staged cache links were left in place.")
         return
     if status == "incomplete":
-        _remove_created_links(created)
+        package.clear_links(destination)
         print("    qBittorrent's recheck was below 100%; removed the torrent and kept it off the cache files.")
         return
     out.mkdir(parents=True, exist_ok=True)
@@ -331,19 +303,14 @@ def seed_from_cache(per_file=True):
     ollama_root, ollama_blobs, ollama_queries = _ollama_cache()
     blobs = hf_blobs | ollama_blobs
     repos = set(snapshots)
-    ollama_repos, ollama_search_failed = _search_ollama(ollama_queries)
-    repos.update(ollama_repos)
+    repos.update(_search_ollama(ollama_queries))
     if not blobs and not any(snapshots.values()):
         raise SeedError(
             f"no content-addressed model files found in Hugging Face cache ({hf_root}) or Ollama store ({ollama_root})"
         )
     if not repos:
-        if ollama_search_failed:
-            print("Ollama model-name search failed; skipping those cache matches.", file=sys.stderr)
         print("No Pirate Face listings were found for the available cache names.")
         return
-    if ollama_search_failed:
-        print("Ollama name search failed; continuing with available cache listings.", file=sys.stderr)
     print(f"==> Found {len(blobs)} SHA-256 named cache file(s); searching their model listings")
     candidates = _listings(repos, blobs, snapshots)
     if not candidates:

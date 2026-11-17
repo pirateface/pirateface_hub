@@ -54,27 +54,9 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 
 `pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). `pf seed --from-cache` asks for it only after you choose a match to seed. Run `pf <command> --help` for every flag.
 
-## Seed models already in your caches
+## Seed from cache
 
-`pf seed --from-cache` looks for existing Pirate Face torrents that match files already in your Hugging
-Face or Ollama cache:
-
-```sh
-pf seed --from-cache
-```
-
-It reads SHA-256 names from the Hugging Face cache and Ollama blobs, looks up candidate listings, and
-hashes only snapshot files that are not already named by SHA-256. Ollama is found at `OLLAMA_MODELS` when
-set, or its standard model directory otherwise. The command stages symlinks in `PIRATEFACE_SEEDS/matches`,
-adds each torrent stopped to qBittorrent 5.x (paused on 4.x), and asks qBittorrent to recheck the existing
-files. A torrent starts only if the recheck reaches 100%; incomplete torrents are removed without
-downloading missing data. No file copies are made.
-qBittorrent must already be running with its Web UI reachable through `QBT_URL`, `QBT_USER`, and `QBT_PASS`
-as needed; this option does not edit qBittorrent settings.
-
-Each candidate is shown with its current seed and leecher counts and requires confirmation unless `-y` is
-passed. The keyed tracker is added after confirmation so seeding counts toward your account. This scans
-cached model repositories and Ollama model names only; it does not create or submit listings.
+`pf seed --from-cache` matches local Hugging Face and Ollama cache files to existing Pirate Face torrents. qBittorrent verifies each match before seeding and does not download missing files.
 
 ## When Pirate Face is down
 

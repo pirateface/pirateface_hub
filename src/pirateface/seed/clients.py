@@ -1,6 +1,7 @@
 """The user's torrent client: Transmission (RPC) or qBittorrent (Web UI)."""
 
 import base64
+import contextlib
 import http.cookiejar
 import json
 import os
@@ -112,14 +113,12 @@ class QBittorrent:
         if os.environ.get("QBT_USER"):
             self.call("auth/login", {"username": os.environ["QBT_USER"], "password": os.environ.get("QBT_PASS", "")})
         try:
-            self.version = self.call("app/version").strip()
+            self.call("app/version")
         except urllib.error.HTTPError as e:
             # Whatever auth/login answers, a 403 on any API call means we are not authorized.
             if e.code == 403:
                 raise LoginRefused("qBittorrent refused the login: check QBT_USER and QBT_PASS") from e
             raise
-        match = re.search(r"(?<!\d)(\d+)\.(\d+)", self.version)
-        self.version_numbers = tuple(map(int, match.groups())) if match else (0, 0)
 
     def call(self, path, form=None, body=None, content_type=None, text=True):
         if form is not None:
@@ -151,11 +150,7 @@ class QBittorrent:
         """The .torrent file of a torrent in the client (qBittorrent 4.5 or later)."""
         return self.call("torrents/export?hash=" + h, text=False)
 
-    def find(self, infohash):
-        """The client's entry for the torrent, or None."""
-        return self.find_any(infohash)
-
-    def find_any(self, *infohashes):
+    def find(self, *infohashes):
         """The client's entry matching any infohash or torrent ID, or None."""
         # qBittorrent ids a hybrid or v2 torrent by its v2 hash cut to 40 digits; full hashes are in infohash_v1/_v2.
         ids = ("hash", "infohash_v1", "infohash_v2")
@@ -187,22 +182,12 @@ class QBittorrent:
         if answer == "Fails.":
             raise RuntimeError("qBittorrent did not take the torrent")
         try:
-            result = json.loads(answer)
+            return json.loads(answer).get("added_torrent_ids", [])
         except ValueError:
             return []
-        if not isinstance(result, dict):
-            return []
-        ids = result.get("added_torrent_ids") or []
-        if isinstance(ids, str):
-            ids = [ids]
-        elif not isinstance(ids, list):
-            ids = []
-        if not ids and result.get("failure_count") and not result.get("pending_count"):
-            raise RuntimeError("qBittorrent failed to add the torrent")
-        return [str(infohash) for infohash in ids]
 
     def add_paused_and_recheck(self, data, save_dir, v1, timeout=1800):
-        """Add stopped (or paused on qBittorrent 4.x), and resume only a complete verified match.
+        """Add the torrent stopped for rechecking; resume only a complete verified match.
 
         An incomplete or timed out add is removed without deleting staged links or source files.
         """
@@ -210,22 +195,19 @@ class QBittorrent:
             return "already"
         ids = [v1]
         try:
-            if self.version_numbers >= (5, 0):
-                ids.extend(self.add(data, save_dir, stopped=True))
-            else:
-                ids.extend(self.add(data, save_dir, paused=True))
+            ids.extend(self.add(data, save_dir, paused=True, stopped=True))
             deadline = time.monotonic() + 30
-            added = self.find_any(*ids)
+            added = self.find(*ids)
             while not added and time.monotonic() < deadline:
                 time.sleep(0.5)
-                added = self.find_any(*ids)
+                added = self.find(*ids)
             if not added:
                 raise RuntimeError("qBittorrent did not report the added torrent")
             torrent_hash = added["hash"]
             self.call("torrents/recheck", {"hashes": torrent_hash})
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
-                current = self.find_any(*ids, torrent_hash)
+                current = self.find(*ids, torrent_hash)
                 if not current:
                     raise RuntimeError("qBittorrent removed the torrent during its recheck")
                 if "check" not in current.get("state", "").casefold():
@@ -245,7 +227,7 @@ class QBittorrent:
             return "incomplete"
         except Exception:
             with contextlib.suppress(Exception):
-                current = self.find_any(*ids)
+                current = self.find(*ids)
                 if current:
                     self.remove(current["hash"])
             raise

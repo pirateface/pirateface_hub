@@ -120,21 +120,6 @@ def update_trackers():
 def run(args):
     user.YES = args.yes
     try:
-        if (
-            args.cmd == "seed"
-            and args.from_cache
-            and (
-                args.repo_id
-                or args.folder
-                or args.revision
-                or args.hf_cache
-                or args.update_trackers
-                or args.update_per_file
-                or args.upgrade
-                or args.mine
-            )
-        ):
-            raise SeedError("--from-cache cannot be combined with a repo, folder or another seed mode")
         if args.cmd == "submit":
             submit.submit(args)
         elif args.update_trackers:
