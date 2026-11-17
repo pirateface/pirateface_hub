@@ -2,6 +2,7 @@
 
 import atexit
 import contextlib
+import enum
 import functools
 import json
 import re
@@ -15,8 +16,16 @@ from importlib.metadata import version
 
 from pirateface.config import API, flag
 
-NOT_LISTED = object()
-LICENSE_REQUIRED = object()
+
+class Answer(enum.Enum):
+    """What the site said about a repo when it had no listing to give."""
+
+    NOT_LISTED = "not listed"  # a 404
+    LICENSE_REQUIRED = "licence terms to accept first"  # the site's own JSON 401/403
+    UNUSABLE = "an answer this client cannot use"  # any other 4xx, or JSON that isn't an entry
+
+
+NOT_LISTED, LICENSE_REQUIRED, UNUSABLE = Answer
 
 # One dead lookup per half-minute, not one per file: an outage costs 10s once, then fails fast.
 UNREACHABLE_FOR = 30.0
@@ -28,13 +37,6 @@ MAX_TORRENT_BYTES = 4_000_000
 
 class Unreachable(Exception):
     """pirateface.co didn't answer: distinct from "this repo isn't listed"."""
-
-
-def _read_torrent(url, timeout):
-    """The .torrent at url, or None if it is over MAX_TORRENT_BYTES."""
-    with request(url, timeout) as r:
-        data = r.read(MAX_TORRENT_BYTES + 1)
-    return data if len(data) <= MAX_TORRENT_BYTES else None
 
 
 def _mark_down():
@@ -53,6 +55,52 @@ def request(url, timeout, *, method=None, headers=None, data=None):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def _site_answer(fetch):
+    """The memo policy for site answers: an answer is kept for the process, an outage never is. An outage
+    (fetch raising Unreachable) starts the UNREACHABLE_FOR latch, during which uncached calls fail fast."""
+    answers = {}
+
+    @functools.wraps(fetch)
+    def answer(*args):
+        if args not in answers:
+            if time.monotonic() < _down_until:
+                raise Unreachable(f"could not reach {API}")
+            try:
+                answers[args] = fetch(*args)
+            except Unreachable:
+                _mark_down()
+                raise
+        return answers[args]
+
+    return answer
+
+
+def _get(url, timeout, limit=None):
+    """(HTTP status, body) of the site's answer at url; an error answer's body is b"" if it can't be read.
+
+    Raises Unreachable when there is no answer: no connection, or rate limiting, a timeout, a redirect loop
+    or a 5xx from a CDN or reverse proxy in front of the site."""
+    try:
+        with request(url, timeout) as r:
+            return r.status, r.read(limit)
+    except urllib.error.HTTPError as e:
+        if e.code in (408, 425, 429) or 300 <= e.code < 400 or e.code >= 500:
+            raise Unreachable(f"could not reach {API}") from e
+        error = e
+    except Exception as e:  # http.client.HTTPException (truncated body, bad status line) is not an OSError
+        raise Unreachable(f"could not reach {API}") from e
+    with contextlib.suppress(Exception):
+        return error.code, error.read(limit)
+    return error.code, b""
+
+
+def _torrent(path):
+    """The .torrent at path (as the API gives it), or None: an answer that there is none (403/404/410 and
+    friends) or one over MAX_TORRENT_BYTES. Raises Unreachable."""
+    status, data = _get(urllib.parse.urljoin(API, path), 30, MAX_TORRENT_BYTES + 1)
+    return data if status < 400 and len(data) <= MAX_TORRENT_BYTES else None
+
+
 @functools.cache
 def search_models(query):
     """Pirate Face's terminal model search (/s/<query>), as text lines, or None on failure."""
@@ -64,67 +112,39 @@ def search_models(query):
         return None
 
 
-@functools.cache
+@_site_answer
 def lookup(repo_id, quant=None):
-    """Pirate Face's entry for the repo, NOT_LISTED, LICENSE_REQUIRED, or None for an answer we cannot use.
-
-    Raises Unreachable when the site cannot be reached at all, so callers can tell an outage
-    from a 404 instead of treating both as "not on Pirate Face".
-    quant: one of entry["quants"][i]["quant"], when the revision has a torrent per quant.
-    """
-    if time.monotonic() < _down_until:
-        raise Unreachable(f"could not reach {API}")
+    """Pirate Face's entry (a dict) for the repo, or an Answer: NOT_LISTED, LICENSE_REQUIRED or UNUSABLE.
+    Raises Unreachable when the site cannot be reached at all, so an outage is never "not on Pirate Face".
+    quant: one of entry["quants"][i]["quant"], when the revision has a torrent per quant."""
     params = {"repo": repo_id, **({"quant": quant} if quant else {})}
-    url = f"{API}/api/torrents?" + urllib.parse.urlencode(params)
+    status, body = _get(f"{API}/api/torrents?" + urllib.parse.urlencode(params), 10)
+    if status == 404:
+        return NOT_LISTED
+    if status >= 400 and status not in (401, 403):
+        return UNUSABLE
     try:
-        with request(url, 10) as r:
-            body = r.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return NOT_LISTED
-        if e.code in (401, 403):
-            try:
-                json.load(e)  # the site's own licence answers are JSON
-            except Exception:
-                # An HTML 401/403 is a captive portal, proxy or firewall page in front of the site, not a
-                # licence answer: telling the user to accept licence terms would send them to the wrong fix.
-                _mark_down()
-                raise Unreachable(f"could not reach {API}") from e
-            return LICENSE_REQUIRED
-        if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
-            # Rate limiting, a timeout, a redirect loop or a CDN/reverse proxy saying 5xx is an
-            # outage, not a licensing answer.
-            _mark_down()
-            raise Unreachable(f"could not reach {API}") from e
-        return None
-    except Exception as e:
-        # http.client.HTTPException (truncated body, bad status line) is not an OSError.
-        _mark_down()
-        raise Unreachable(f"could not reach {API}") from e
-    try:
-        return json.loads(body)
+        entry = json.loads(body)
     except ValueError as e:
-        # A 200 carrying HTML (captive portal, WAF interstitial) is an outage, not an answer.
-        _mark_down()
+        # HTML from a captive portal, proxy or WAF in front of the site is an outage, not an answer: an HTML
+        # 401/403 must not send the user to accept licence terms for the wrong fix.
         raise Unreachable(f"could not read {API}'s answer") from e
+    if status in (401, 403):
+        return LICENSE_REQUIRED
+    return entry if isinstance(entry, dict) else UNUSABLE
 
 
 def lookup_soft(repo_id):
-    """lookup(), with an unreachable site reported as None. Other answers (including the licence
-    sentinel) pass through, so callers that print their own message can still tell them apart."""
+    """lookup(), with no usable answer (an unreachable site or UNUSABLE) reported as None. The other answers
+    pass through, so callers that print their own message can still tell them apart."""
     try:
-        return lookup(repo_id)
+        entry = lookup(repo_id)
     except Unreachable:
         return None
+    return None if entry is UNUSABLE else entry
 
 
-def lookup_magnet(repo_id):
-    """The magnet, NOT_LISTED, LICENSE_REQUIRED, or None for an answer we cannot use."""
-    entry = lookup(repo_id)
-    return entry.get("magnet") if isinstance(entry, dict) else entry
-
-
-@functools.cache
+@_site_answer
 def torrent_file(repo_id, quant=None):
     """The .torrent's bytes if Pirate Face publishes one for the repo (or that quant), else None."""
     entry = lookup(repo_id, quant)
@@ -132,24 +152,11 @@ def torrent_file(repo_id, quant=None):
     if not path:
         return None
     try:
-        return _read_torrent(urllib.parse.urljoin(API, path), 30)
-    except urllib.error.HTTPError as e:
-        if e.code == 429 or e.code in (408, 425) or 300 <= e.code < 400 or e.code >= 500:
-            # Don't cache a rate-limit blip as "no .torrent": the same latch lookup() uses.
-            _mark_down()
-            raise Unreachable(f"could not reach {API}") from e
-        # 403/404/410 and friends are answers about this torrent; keep the "no .torrent" answer
-        # that pf_only() relies on.
-        return None
-    except urllib.error.URLError as e:
-        if isinstance(e.reason, ssl.SSLError):
+        return _torrent(path)  # "no .torrent" is an answer pf_only() relies on; an outage is never kept
+    except Unreachable as e:
+        if isinstance(getattr(e.__cause__, "reason", None), ssl.SSLError):
             return None  # this request's handshake failed; lookups to the site can still work
-        _mark_down()
-        raise Unreachable(f"could not reach {API}") from e
-    except Exception as e:
-        # Don't cache "no .torrent" for the process: a blip would hide a PF-only repo for good.
-        _mark_down()
-        raise Unreachable(f"could not reach {API}") from e
+        raise
 
 
 def pf_only(repo_id):
@@ -196,10 +203,9 @@ def file_root(root):
 
 def download(path):
     """A .torrent on the site (path as the API gives it), or None."""
-    try:
-        return _read_torrent(urllib.parse.urljoin(API, path), 30)
-    except Exception:
-        return None
+    with contextlib.suppress(Exception):
+        return _torrent(path)
+    return None
 
 
 # Fallback when the site doesn't answer; normally replaced by /api/trackers.
@@ -245,22 +251,22 @@ def older(a, b):
     return _release(a) < _release(b)
 
 
-def submit(key, body, path="/api/community-torrents"):
-    """POST a community torrent. Returns (HTTP status, JSON answer)."""
+def _post(key, path, data, content_type, timeout):
+    """POST data to the site as this account. Returns (HTTP status, JSON answer)."""
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": content_type}
     try:
-        with request(
-            f"{API}{path}",
-            120,
-            method="POST",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            data=json.dumps(body).encode(),
-        ) as r:
+        with request(f"{API}{path}", timeout, method="POST", headers=headers, data=data) as r:
             return r.status, json.load(r)
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.load(e)
         except Exception:
             return e.code, {"error": e.reason}
+
+
+def submit(key, body, path="/api/community-torrents"):
+    """POST a community torrent. Returns (HTTP status, JSON answer)."""
+    return _post(key, path, json.dumps(body).encode(), "application/json", 120)
 
 
 def upgrade(key, body):
@@ -289,20 +295,7 @@ def my_torrents(key):
 
 def restore(key, data):
     """POST raw .torrent bytes to /api/torrents/restore. Returns (HTTP status, JSON answer)."""
-    try:
-        with request(
-            f"{API}/api/torrents/restore",
-            60,
-            method="POST",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/x-bittorrent"},
-            data=data,
-        ) as r:
-            return r.status, json.load(r)
-    except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.load(e)
-        except Exception:
-            return e.code, {"error": e.reason}
+    return _post(key, "/api/torrents/restore", data, "application/x-bittorrent", 60)
 
 
 _rescues = []
