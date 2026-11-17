@@ -21,8 +21,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://pirateface.co"
-Source = "https://github.com/pirateface/pirateface_hub"
-Issues = "https://github.com/pirateface/pirateface_hub/issues"
+Source = "https://github.com/pirateface/pirateface_cli"
+Issues = "https://github.com/pirateface/pirateface_cli/issues"
 
 [project.scripts]
 pf = "pirateface.cli:main"
