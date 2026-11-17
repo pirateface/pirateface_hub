@@ -47,6 +47,9 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 `pf seed --upgrade org/model`) and ones that aren't complete yet.
 
 `pf work --max-size 100` takes only models up to 100 GiB. `pf work --once` takes one job and exits.
+If `pf work` is interrupted, it saves the lease and file metadata privately under the Pirate Face config directory
+and resumes that job on the next run while the lease is still active. The stream starts again from the beginning;
+model bytes are never saved to disk. Expired checkpoints are removed automatically.
 
 `pf restore` takes `.torrent` files or a client folder, such as qBittorrent's `BT_backup` or Transmission's `torrents/`.
 
