@@ -54,10 +54,6 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 
 `pf seed`, `submit`, `work` and `restore` ask once for your key from [pirateface.co/settings](https://pirateface.co/settings). `pf seed --from-cache` asks for it only after you choose a match to seed. Run `pf <command> --help` for every flag.
 
-## Seed from cache
-
-`pf seed --from-cache` matches local Hugging Face and Ollama cache files to existing Pirate Face torrents. qBittorrent verifies each match before seeding and does not download missing files.
-
 ## When Pirate Face is down
 
 The site's magnet index lists every model's magnet as a weekly torrent of shards, and pf keeps a copy of

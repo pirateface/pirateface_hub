@@ -191,8 +191,6 @@ class QBittorrent:
 
         An incomplete or timed out add is removed without deleting staged links or source files.
         """
-        if self.has(v1):
-            return "already"
         ids = [v1]
         try:
             ids.extend(self.add(data, save_dir, paused=True, stopped=True))
