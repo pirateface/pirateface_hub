@@ -76,7 +76,7 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     lease.renew()  # confirm we hold the lease before streaming
     lease.start()
     sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
-    rate_limiter = source.RateLimiter(max_download_rate)
+    rate_limiter = source.RateLimiter(max_download_rate) if max_download_rate is not None else None
 
     def on_read(n):
         lease.note(n)

@@ -189,7 +189,7 @@ def _main():
         "--max-download-rate",
         type=_download_rate,
         metavar="MB/s",
-        help="maximum Hugging Face download rate in decimal MB/s (default: unlimited)",
+        help="per-process Hugging Face download rate in decimal MB/s (default: unlimited)",
     )
     w.add_argument("-y", "--yes", action="store_true", help="skip the prompt; only on the user's explicit OK")
     r = sub.add_parser(

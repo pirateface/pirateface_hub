@@ -3,7 +3,6 @@
 import hashlib
 import http.client
 import os
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -23,22 +22,18 @@ class RateLimiter:
     """Paces streamed bytes to a shared maximum rate."""
 
     def __init__(self, bytes_per_second):
-        self.bytes_per_second = bytes_per_second
-        self.started = None
-        self.bytes_read = 0
-        self.lock = threading.Lock()
+        self._bytes_per_second = bytes_per_second
+        self._started = None
+        self._bytes_read = 0
 
     def wait(self, count):
-        if self.bytes_per_second is None:
-            return
-        with self.lock:
-            if self.started is None:
-                self.started = time.monotonic()
-            self.bytes_read += count
-            deadline = self.started + self.bytes_read / self.bytes_per_second
-            delay = deadline - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
+        if self._started is None:
+            self._started = time.monotonic()
+        self._bytes_read += count
+        deadline = self._started + self._bytes_read / self._bytes_per_second
+        delay = deadline - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 def _wait(error, attempt):
