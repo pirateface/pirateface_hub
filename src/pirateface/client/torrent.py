@@ -415,15 +415,15 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
                 with _idle_cv:
                     while _active.get(repo_id):
                         _idle_cv.wait(5)
-            if h.status().state == lt.torrent_status.finished:  # still: no other fetch revived it meanwhile
-                resume = _resume_data(h)
-                with _lock:
-                    with contextlib.suppress(Exception):
-                        _get_session().remove_torrent(h)
-                    _handles.pop(repo_id, None)
-                h = _handle(repo_id, resume, magnet=magnet)
-                if h is None:
-                    raise Unavailable()
+                if h.status().state == lt.torrent_status.finished:  # still: no other fetch revived it meanwhile
+                    resume = _resume_data(h)
+                    with _lock:
+                        with contextlib.suppress(Exception):
+                            _get_session().remove_torrent(h)
+                        _handles.pop(repo_id, None)
+                    h = _handle(repo_id, resume, magnet=magnet)
+                    if h is None:
+                        raise Unavailable()
 
             ti = h.torrent_file()
             i = _file_index(ti, filename)
