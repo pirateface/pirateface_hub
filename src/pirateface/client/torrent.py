@@ -454,7 +454,9 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
                 _active[repo_id] = _active.get(repo_id, 0) + 1
                 counted = True
 
-        last_done, last_change = -1, time.monotonic()
+        # A stall is no bytes arriving, not no piece finishing: one large piece from a slow but live swarm can
+        # take longer than the timeout.
+        last_received, last_change = -1, time.monotonic()
         while True:
             done = h.file_progress(lt.torrent_handle.piece_granularity)[i]
             if done >= size:
@@ -462,8 +464,8 @@ def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=Non
             st = h.status()
             if st.errc.value():
                 raise RuntimeError(f"torrent error: {st.errc.message()}")
-            if done != last_done:
-                last_done, last_change = done, time.monotonic()
+            if st.total_payload_download != last_received:
+                last_received, last_change = st.total_payload_download, time.monotonic()
             elif time.monotonic() - last_change > stall_timeout:
                 raise TimeoutError(f"stalled for {stall_timeout:.0f}s")
             time.sleep(0.25)
