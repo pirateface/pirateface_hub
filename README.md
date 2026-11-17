@@ -49,6 +49,10 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 `pf work --max-size 100` takes only models up to 100 GiB. `pf work --once` takes one job and exits.
 `pf work --max-download-rate 10` caps the Hugging Face stream at 10 MB/s; without the option, it is unlimited.
 The limit applies per process, so multiple workers can use more bandwidth in total.
+If `pf work` is interrupted, it saves the lease and file metadata privately under the Pirate Face config directory
+and resumes that job on the next run while the lease is still active. The stream starts again from the beginning;
+model bytes are never saved to disk. Expired checkpoints are removed automatically.
+Use a distinct `--name` for each concurrent worker so their checkpoints do not overwrite each other.
 
 `pf restore` takes `.torrent` files or a client folder, such as qBittorrent's `BT_backup` or Transmission's `torrents/`.
 

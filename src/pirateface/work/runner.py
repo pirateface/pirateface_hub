@@ -7,7 +7,7 @@ from pirateface import ui
 from pirateface.client import api
 from pirateface.config import API, MAX_UPLOAD_BYTES
 from pirateface.seed import proofs, user
-from pirateface.work import build, site
+from pirateface.work import build, site, state
 from pirateface.work.errors import Oversize, WorkError, WorkUnreachable
 
 WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
@@ -17,23 +17,16 @@ WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-min
 def _consent():
     print(f"""
 ==> pf work: you build the torrent for one queued model at a time. Its files are streamed from
-    Hugging Face through memory and not saved; only their 16 KiB block hashes are kept in a temporary
-    file until the torrent is submitted. The torrent is listed on Pirate Face under your
+    Hugging Face through memory; no model bytes are written to disk. Only their 16 KiB block hashes
+    are kept in a temporary file until the torrent is submitted. A private checkpoint with the lease
+    and file metadata is saved so an interrupted run can resume. The torrent is listed on Pirate Face under your
     account. Verified work earns points: see {API}/how-it-works.
     Terms: {API}/terms#model-torrent-submissions""")
     if not user.YES and user.ask("    Type yes to start: ") != "yes":
         raise user.SeedError("not started")
 
 
-def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
-    """One job. Returns None if nothing was queued, else True if listed, False if the site refused it."""
-    status, job = site.lease(key, name, max_bytes)
-    if status == 204:
-        return None
-    if status == 0:  # the site could not be reached: network error, not a refusal
-        raise WorkUnreachable(job["error"])
-    if status != 200:
-        raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
+def _job_size(job, max_bytes):
     sizes = [f.get("size") for f in job["files"]]
     if None in sizes:
         # Refused with or without a cap: a lease that does not say how big it is cannot be checked against one,
@@ -48,6 +41,11 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
             f"{job['repoId']} is {total / 1e9:.2f} GB, over the {max_bytes / 1024**3:.0f} GiB cap this run "
             f"asked for: not downloaded. Raise --max-size, or leave it off, to take jobs this size"
         )
+    return total
+
+
+def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=None):
+    total = _job_size(job, max_bytes)
     ui.aligned(
         [
             ("leased", job["repoId"]),
@@ -56,25 +54,68 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
             ("size", f"{total / 1e9:.2f} GB"),
         ]
     )
-    # A failed build raises. The failed job's row stays leased to this account until it lapses, so the
-    # next lease call gets a different job; the request then goes back to the queue.
-    with proofs.sidecar() as blocks:
-        data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise user.SeedError("the .torrent is over the 3 MB upload limit")
-        block_proofs = proofs.answer(key, data, blocks)
+    state.save(job, name)
+    # A failed build raises. The lease remains active until it lapses; the server decides whether
+    # another job can be leased before then.
+    try:
+        with proofs.sidecar() as blocks:
+            data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
+            if len(data) > MAX_UPLOAD_BYTES:
+                raise user.SeedError("the .torrent is over the 3 MB upload limit")
+            block_proofs = proofs.answer(key, data, blocks)
+    except WorkUnreachable:
+        raise
+    except (WorkError, user.SeedError):
+        state.clear(name)
+        raise
     status, answer = site.complete(key, job["leaseId"], data, manifest, block_proofs)
-    if status == 0:  # the site could not be reached: the torrent is built but not submitted
-        raise WorkError(f"could not submit the torrent: {answer.get('error', 'the site could not be reached')}")
+    if status == 0 or status in {408, 425, 429} or status >= 500:
+        raise WorkUnreachable(
+            f"could not submit the torrent: {(answer or {}).get('error', 'the site could not be reached')}"
+        )
     if status == 200:
+        state.clear(name)
         # already_listed: the same files are listed under another infohash, which the site returns.
         if (answer or {}).get("status") == "already_listed":
             print(f"    Already listed: {API}/{job['repoId']} ({answer.get('infohash', '')})")
         else:
             ui.aligned([("listed", f"{API}/{job['repoId']}"), ("infohash", infohash)])
         return True
+    state.clear(name)
     print(f"    Not listed ({status}): {(answer or {}).get('error', 'request failed')}")
     return False
+
+
+def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
+    """Take one new job. Returns None if none was queued, else True if listed, False if refused."""
+    status, job = site.lease(key, name, max_bytes)
+    if status == 204:
+        return None
+    if status == 0:  # the site could not be reached: network error, not a refusal
+        raise WorkUnreachable(job["error"])
+    if status != 200:
+        raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
+    return _process_job(job, key, trackers, name, max_bytes, max_download_rate)
+
+
+def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=None):
+    """Renew and process the saved job. Returns None if the saved lease expired."""
+    try:
+        _job_size(saved["job"], max_bytes)
+    except Oversize:
+        state.clear(name)
+        raise
+    status, answer = site.renew(key, saved["leaseId"])
+    if status == 410:
+        state.clear(name)
+        print("Saved lease expired; taking a new job.", file=sys.stderr)
+        return None
+    if status == 0 or status in {408, 425, 429} or status >= 500:
+        raise WorkUnreachable((answer or {}).get("error", f"lease renewal failed ({status})"))
+    if status != 200:
+        raise user.SeedError(f"could not resume lease ({status}): {(answer or {}).get('error', 'request failed')}")
+    print(f"Resuming {saved['job'].get('repoId', 'saved job')}.")
+    return _process_job(saved["job"], key, trackers, name, max_bytes, max_download_rate)
 
 
 def run(args):
@@ -87,11 +128,26 @@ def run(args):
     trackers = api.trackers(key)
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
     max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000
+    try:
+        pending = state.load(args.name)
+    except OSError as e:
+        sys.exit(f"error: {e}")
     backoff = WORK_BACKOFF_MIN
     while True:
         try:
-            listed = _work_once(key, trackers, args.name, max_bytes, max_download_rate)
+            if pending:
+                listed = _resume_once(key, trackers, args.name, pending, max_bytes, max_download_rate)
+                if listed is None:
+                    pending = None
+                    continue
+                pending = None
+            else:
+                listed = _work_once(key, trackers, args.name, max_bytes, max_download_rate)
         except (WorkUnreachable, Oversize) as e:
+            try:
+                pending = state.load(args.name)
+            except OSError as state_error:
+                sys.exit(f"error: {state_error}")
             if args.once:
                 sys.exit(f"error: {e}")
             # Neither is a failed job: the site is down, or it offered a row this run won't take. Pause and
@@ -101,10 +157,10 @@ def run(args):
             backoff = min(backoff * 2, WORK_BACKOFF_MAX)
             continue
         except WorkError as e:
+            pending = None
             if args.once:
                 sys.exit(f"error: {e}")
-            # A failed job's row stays leased to this account until it lapses, so the next lease call
-            # gets a different job: take it at once.
+            # Ask for another job; the site may refuse while the failed lease is still active.
             print(f"error: {e}. Taking the next job.", file=sys.stderr)
             continue
         except user.SeedError as e:

@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 
 from pirateface.seed import hub
-from pirateface.work.errors import WorkError
+from pirateface.work.errors import WorkError, WorkUnreachable
 
 HF = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
 ATTEMPTS = 3
@@ -78,8 +78,8 @@ def _open(url, headers, path, offset=0):
         return resp, (offset + int(length) if length else None)
     if isinstance(last, urllib.error.HTTPError) and last.code in WAIT_FOR:
         why = "is rate limiting this run" if last.code == 429 else "is temporarily unavailable"
-        raise WorkError(f"{path}: Hugging Face {why} ({last.code}) after {ATTEMPTS} attempts") from last
-    raise WorkError(f"could not open {path} on Hugging Face: {last}")
+        raise WorkUnreachable(f"{path}: Hugging Face {why} ({last.code}) after {ATTEMPTS} attempts") from last
+    raise WorkUnreachable(f"could not open {path} on Hugging Face: {last}")
 
 
 class Stream:
@@ -102,7 +102,9 @@ class Stream:
     def _reopen(self, at, error):
         self.drops += 1
         if self.drops > ATTEMPTS:
-            raise WorkError(f"{self.path}: the connection to Hugging Face kept dropping ({error or 'ended early'})")
+            raise WorkUnreachable(
+                f"{self.path}: the connection to Hugging Face kept dropping ({error or 'ended early'})"
+            )
         self.resp.close()
         time.sleep(2**self.drops)
         self.resp, self.length = _open(self.url, self.headers, self.path, at)
