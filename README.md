@@ -87,6 +87,7 @@ pf index --sync   # mirror the build the site names, replacing copies the build 
 | `HF_TOKEN` | For gated repos |
 | `PF_DISABLE` | Set to `1` to turn the download hook off |
 | `PF_HF_FIRST` | `1` = download from Hugging Face first, swarm only when it fails |
+| `PF_NO_BLOCK_PROOFS` | `1` = `pf work`, `submit` and `seed` submit without block proofs (by default they prove random 16 KiB blocks against the torrent's v2 hashes) |
 
 ## Development
 

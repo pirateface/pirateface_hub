@@ -104,24 +104,25 @@ def files_under(root):
     return [p for p in paths if p[0] != ".pad"]
 
 
-def build(root, trackers, plen=None, sums=None):
+def build(root, trackers, plen=None, sums=None, blocks=None):
     """Hybrid torrent of the folder root (its name is the torrent's name). Returns (bytes, v1 hex, v2 hex).
-    sums: a dict to fill with each file's SHA-256, read in the same pass."""
+    sums: a dict to fill with each file's SHA-256, read in the same pass. blocks: as for build_from()."""
     root = Path(root)
     paths = files_under(root)
     if not paths:
         raise ValueError("no files to put in the torrent")
     if plen is None:
         plen = piece_length(sum(root.joinpath(*p).stat().st_size for p in paths))
-    return build_from(root.absolute().name, from_folder(root, paths), trackers, plen, sums)
+    return build_from(root.absolute().name, from_folder(root, paths), trackers, plen, sums, blocks)
 
 
-def build_from(name, sources, trackers, plen, sums=None):
+def build_from(name, sources, trackers, plen, sums=None, blocks=None):
     """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (from_folder sorts them).
 
     opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
     except the last must return exactly BLOCK bytes: each read is hashed as one v2 leaf. Nothing is kept,
     so a source can be a network stream. Returns (bytes, v1 hex, v2 hex). sums: as for build().
+    blocks: a proofs.BlockHashes that keeps every block hash, for the block proofs after submitting.
     """
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
@@ -130,6 +131,8 @@ def build_from(name, sources, trackers, plen, sums=None):
     for parts, opener in sources:
         size, leaves, piece_roots = 0, [], []
         whole = hashlib.sha256() if sums is not None else None
+        if blocks is not None:
+            blocks.begin("/".join(parts))
         with opener() as f:
             while block := f.read(BLOCK):
                 size += len(block)
@@ -137,6 +140,8 @@ def build_from(name, sources, trackers, plen, sums=None):
                 if whole:
                     whole.update(block)
                 leaves.append(hashlib.sha256(block).digest())
+                if blocks is not None:
+                    blocks.add(leaves[-1])
                 if len(leaves) == per_piece:
                     piece_roots.append(_merkle(leaves, ZERO))
                     leaves = []
