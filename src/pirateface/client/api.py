@@ -141,11 +141,18 @@ def torrent_file(repo_id, quant=None):
         raise Unreachable(f"could not reach {API}") from e
 
 
-@functools.cache
 def pf_only(repo_id):
-    """The repo's commit and files {path: (size, sha256, url)} if only Pirate Face has it, else None."""
+    """listed(repo_id) if only Pirate Face has the repo, else None."""
     entry = lookup(repo_id)
-    if not (isinstance(entry, dict) and entry.get("hf") is False):
+    return listed(repo_id) if isinstance(entry, dict) and entry.get("hf") is False else None
+
+
+@functools.cache
+def listed(repo_id):
+    """The listed commit and files {path: (size, sha256, url)}: the torrent's files the listing has a sha256
+    for. None if the repo isn't listed, has no .torrent (a licence-gated listing carries none) or no sha256s."""
+    entry = lookup(repo_id)
+    if not isinstance(entry, dict):
         return None
     data = torrent_file(repo_id)
     if not data:
@@ -157,7 +164,8 @@ def pf_only(repo_id):
         files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
     except torrent.Unsafe:
         return None  # a listing the client won't write: same answer as "not only on Pirate Face"
-    return {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files} if files else None
+    found = {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files}
+    return found | {"trust": "Pirate Face's listing"} if files else None
 
 
 def file_root(root):

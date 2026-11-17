@@ -34,6 +34,7 @@ from pirateface.index import FILE, INDEX_REPO
 WS_HOSTS = {"pirateface.co"}
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}")
 _HASH = re.compile(r"[0-9a-fA-F]{40}")
+_COMMIT = re.compile(r"[0-9a-f]{40}")
 
 # Carried in the package as the fallback for a copy that has never synced: the site names the current build,
 # and this is the 2026-11-09 build for a client that has not asked yet.
@@ -226,6 +227,32 @@ def count():
 def resolve(repo_id):
     """The cached index's Entry for the repo, or None when this copy of the index does not list it."""
     return _parsed()[0].get(repo_id)
+
+
+def listing(repo_id):
+    """The repo as the cached index names it, in api.listed()'s shape, or None: the commit is the one in the
+    magnet's web seed (.../api/ws/OWNER/NAME/COMMIT/), the file list comes from the swarm.
+
+    There is no sha256 per file (None): the magnet's infohash commits to every piece, and libtorrent counts a
+    piece downloaded only once its hash matches, so the torrent's own hashes are the check.
+    """
+    entry = resolve(repo_id)
+    if entry is None:
+        return None
+    ws = urllib.parse.parse_qs(urllib.parse.urlparse(entry.magnet).query)["ws"][0]  # resolve() checked it
+    parts = [part for part in urllib.parse.urlparse(ws).path.split("/") if part]
+    if len(parts) < 5 or not _COMMIT.fullmatch(parts[4]):
+        return None
+    try:
+        files = torrent.swarm_files(repo_id, magnet=entry.magnet, where="the cached index")
+    except (torrent.Unavailable, TimeoutError):
+        return None
+    return {
+        "repo_id": repo_id,
+        "commit": parts[4],
+        "files": {path: (size, None, None) for path, size in files},
+        "trust": f"the cached index (build {entry.build}): infohash {entry.infohash}",
+    }
 
 
 def state():
