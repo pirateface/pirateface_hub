@@ -211,15 +211,9 @@ def _main():
     from huggingface_hub import snapshot_download
 
     from pirateface import ui
-    from pirateface.client import api
 
-    # One file at a time from the swarm; a model Pirate Face doesn't list uses huggingface_hub's default workers.
-    on_pirateface = isinstance(api.lookup_soft(args.repo_id), dict)
-    kwargs = {"revision": args.revision, "local_dir": args.local_dir}
-    if on_pirateface:
-        kwargs["max_workers"] = 1
     if args.hf_first:
         os.environ["PF_HF_FIRST"] = "1"
-    path = snapshot_download(args.repo_id, **kwargs)
+    path = snapshot_download(args.repo_id, revision=args.revision, local_dir=args.local_dir)
     ui.download_summary()
     print(path)
