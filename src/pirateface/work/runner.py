@@ -8,7 +8,7 @@ from pirateface.client import api
 from pirateface.config import API, MAX_UPLOAD_BYTES
 from pirateface.seed import user
 from pirateface.work import build, site
-from pirateface.work.errors import WorkError, WorkUnreachable
+from pirateface.work.errors import Oversize, WorkError, WorkUnreachable
 
 WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
 WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-minute pause is safe
@@ -33,7 +33,20 @@ def _work_once(key, trackers, name, max_bytes=None):
         raise WorkUnreachable(job["error"])
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
-    total = sum(f["size"] for f in job["files"])
+    sizes = [f.get("size") for f in job["files"]]
+    if None in sizes:
+        # Refused with or without a cap: a lease that does not say how big it is cannot be checked against one,
+        # and it cannot even be totalled for the line printed below.
+        raise Oversize(f"{job['repoId']}: the lease does not say how big its files are")
+    total = sum(sizes)
+    if max_bytes and total > max_bytes:
+        # The site can lease a job past the cap it was asked for (4,970 GB for a 20 GiB cap, seen live), so the
+        # client refuses it rather than streaming gigabytes nobody asked for. There is no way to hand a lease
+        # back -- it lapses on its own -- so this costs the wait, not the data.
+        raise Oversize(
+            f"{job['repoId']} is {total / 1e9:.2f} GB, over the {max_bytes / 1024**3:.0f} GiB cap this run "
+            f"asked for: not downloaded. Raise --max-size, or leave it off, to take jobs this size"
+        )
     ui.aligned(
         [
             ("leased", job["repoId"]),
@@ -74,9 +87,11 @@ def run(args):
     while True:
         try:
             listed = _work_once(key, trackers, args.name, max_bytes)
-        except WorkUnreachable as e:
+        except (WorkUnreachable, Oversize) as e:
             if args.once:
                 sys.exit(f"error: {e}")
+            # Neither is a failed job: the site is down, or it offered a row this run won't take. Pause and
+            # ask again, doubling up to the cap.
             print(f"error: {e}. Checking again in {backoff} s.", file=sys.stderr)
             time.sleep(backoff)
             backoff = min(backoff * 2, WORK_BACKOFF_MAX)

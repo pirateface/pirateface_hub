@@ -13,11 +13,28 @@ from pirateface.work.errors import WorkError
 
 HF = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
 ATTEMPTS = 3
+# Waiting is the whole answer for these: the same set client/api.py treats as "an outage, not an answer".
+WAIT_FOR = {408, 425, 429, 503}
+MAX_WAIT = 300.0
+
+
+def _wait(error, attempt):
+    """Seconds to wait before trying again: Retry-After when Hugging Face sends one, else backoff."""
+    header = getattr(error, "headers", None)
+    after = header.get("Retry-After") if header is not None else None
+    if after:
+        try:
+            secs = float(after)
+        except (TypeError, ValueError):
+            secs = 0.0  # an HTTP date, or junk
+        if secs > 0:
+            return min(secs, MAX_WAIT)
+    return float(2**attempt)
 
 
 def _open(url, headers, path, offset=0):
-    """(response, the file's full length or None), starting at offset. Retries the connection; a 4xx
-    answer is raised at once, since retrying will not change it."""
+    """(response, the file's full length or None), starting at offset. Retries the connection; a 4xx other
+    than a waitable one is raised at once, since retrying will not change it."""
     if offset:
         headers = headers | {"Range": f"bytes={offset}-"}
     last = None
@@ -25,20 +42,25 @@ def _open(url, headers, path, offset=0):
         try:
             resp = hub.urlopen(urllib.request.Request(url, headers=headers), timeout=60)
         except urllib.error.HTTPError as e:
-            if 400 <= e.code < 500:  # 401/403/404: retrying won't change the answer
+            if e.code not in WAIT_FOR and 400 <= e.code < 500:  # 401/403/404: retrying won't change it
                 raise WorkError(f"{path}: Hugging Face refused the request ({e.code})") from e
             last = e
-            time.sleep(2**attempt)
+            if attempt < ATTEMPTS - 1:  # the last attempt has nothing left to wait for
+                time.sleep(_wait(e, attempt))
             continue
         except (urllib.error.URLError, TimeoutError) as e:
             last = e
-            time.sleep(2**attempt)
+            if attempt < ATTEMPTS - 1:
+                time.sleep(2**attempt)
             continue
         if offset and resp.status != 206:
             resp.close()
             raise WorkError(f"{path}: Hugging Face would not resume the download at byte {offset}")
         length = resp.headers.get("Content-Length")
         return resp, (offset + int(length) if length else None)
+    if isinstance(last, urllib.error.HTTPError) and last.code in WAIT_FOR:
+        why = "is rate limiting this run" if last.code == 429 else "is temporarily unavailable"
+        raise WorkError(f"{path}: Hugging Face {why} ({last.code}) after {ATTEMPTS} attempts") from last
     raise WorkError(f"could not open {path} on Hugging Face: {last}")
 
 
