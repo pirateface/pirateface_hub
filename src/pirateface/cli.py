@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 import sys
 
@@ -54,6 +55,7 @@ def _main():
     d.add_argument("repo_id")
     d.add_argument("--revision")
     d.add_argument("--local-dir", help="put the files in this folder instead of the Hugging Face cache")
+    d.add_argument("--hf-first", action="store_true", help="Hugging Face first, the swarm only when it fails")
     s = sub.add_parser(
         "seed",
         help="seed it on Pirate Face, or submit it and seed it",
@@ -171,6 +173,8 @@ def _main():
     kwargs = {"revision": args.revision, "local_dir": args.local_dir}
     if on_pirateface:
         kwargs["max_workers"] = 1
+    if args.hf_first:
+        os.environ["PF_HF_FIRST"] = "1"
     path = snapshot_download(args.repo_id, **kwargs)
     ui.download_summary()
     print(path)
