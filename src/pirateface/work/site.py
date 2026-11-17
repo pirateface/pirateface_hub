@@ -1,4 +1,4 @@
-"""HTTP calls to the Pirate Face work endpoints: lease, renew and complete a job."""
+"""HTTP calls to the Pirate Face work endpoints: lease, renew, release and complete a job."""
 
 import base64
 import http.client
@@ -31,6 +31,11 @@ def request(method, path, key, body=None, timeout=120):
         return 0, {"error": f"could not reach {API} ({e})"}
 
 
+def transient(status):
+    """A status worth asking again after a pause: no answer, a timeout, rate limiting or a server error."""
+    return status == 0 or status in {408, 425, 429} or status >= 500
+
+
 def lease(key, name=None, max_bytes=None):
     """Take one job. 200 with the job, 204 when nothing is queued. name is an optional lane label.
     max_bytes caps the model size in bytes (0 = no cap); absent means the server's default cap."""
@@ -51,6 +56,11 @@ def renew(key, lease_id, bytes_done=None, bytes_total=None, name=None):
         body["bytesDone"] = int(bytes_done)
         body["bytesTotal"] = int(0 if bytes_total is None else bytes_total)
     return request("POST", "/api/work/lease", key, body, timeout=30)
+
+
+def release(key, lease_id):
+    """Give a lease back after a failed build, so the lane can lease again at once instead of after it lapses."""
+    return request("POST", "/api/work/lease", key, {"leaseId": lease_id, "release": True}, timeout=30)
 
 
 def complete(key, lease_id, torrent, manifest, block_proofs=None):
