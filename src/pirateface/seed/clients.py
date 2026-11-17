@@ -1,10 +1,12 @@
 """The user's torrent client: Transmission (RPC) or qBittorrent (Web UI)."""
 
 import base64
+import contextlib
 import http.cookiejar
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -148,29 +150,91 @@ class QBittorrent:
         """The .torrent file of a torrent in the client (qBittorrent 4.5 or later)."""
         return self.call("torrents/export?hash=" + h, text=False)
 
-    def find(self, infohash):
-        """The client's entry for the torrent, or None."""
+    def find(self, *infohashes):
+        """The client's entry matching any infohash or torrent ID, or None."""
         # qBittorrent ids a hybrid or v2 torrent by its v2 hash cut to 40 digits; full hashes are in infohash_v1/_v2.
         ids = ("hash", "infohash_v1", "infohash_v2")
-        return next((t for t in self.torrents() if infohash in (t.get(k) for k in ids)), None)
+        wanted = {str(infohash).casefold() for infohash in infohashes}
+        return next(
+            (t for t in self.torrents() if wanted.intersection(str(t.get(k, "")).casefold() for k in ids)), None
+        )
 
     def has(self, infohash):
         return self.find(infohash) is not None
 
-    def add(self, data, save_dir, skip_checking=False):
+    def add(self, data, save_dir, skip_checking=False, paused=None, stopped=None):
         b = uuid.uuid4().hex
-        skip = f'--{b}\r\nContent-Disposition: form-data; name="skip_checking"\r\n\r\ntrue\r\n' if skip_checking else ""
-        body = (
-            (
-                f'--{b}\r\nContent-Disposition: form-data; name="savepath"\r\n\r\n{save_dir}\r\n{skip}'
-                f'--{b}\r\nContent-Disposition: form-data; name="torrents"; filename="model.torrent"\r\n'
-                "Content-Type: application/x-bittorrent\r\n\r\n"
-            ).encode()
-            + data
-            + f"\r\n--{b}--\r\n".encode()
+        fields = [f'--{b}\r\nContent-Disposition: form-data; name="savepath"\r\n\r\n{save_dir}\r\n']
+        if paused is not None:
+            value = "true" if paused else "false"
+            fields.append(f'--{b}\r\nContent-Disposition: form-data; name="paused"\r\n\r\n{value}\r\n')
+        if stopped is not None:
+            value = "true" if stopped else "false"
+            fields.append(f'--{b}\r\nContent-Disposition: form-data; name="stopped"\r\n\r\n{value}\r\n')
+        if skip_checking:
+            fields.append(f'--{b}\r\nContent-Disposition: form-data; name="skip_checking"\r\n\r\ntrue\r\n')
+        fields.append(
+            f'--{b}\r\nContent-Disposition: form-data; name="torrents"; filename="model.torrent"\r\n'
+            "Content-Type: application/x-bittorrent\r\n\r\n"
         )
-        if self.call("torrents/add", body=body, content_type=f"multipart/form-data; boundary={b}").strip() == "Fails.":
+        body = "".join(fields).encode() + data + f"\r\n--{b}--\r\n".encode()
+        answer = self.call("torrents/add", body=body, content_type=f"multipart/form-data; boundary={b}").strip()
+        if answer == "Fails.":
             raise RuntimeError("qBittorrent did not take the torrent")
+        try:
+            return json.loads(answer).get("added_torrent_ids", [])
+        except ValueError:
+            return []
+
+    def add_paused_and_recheck(self, data, save_dir, v1, timeout=1800):
+        """Add the torrent stopped for rechecking; resume only a complete verified match.
+
+        An incomplete or timed out add is removed without deleting staged links or source files.
+        """
+        if self.has(v1):
+            return "already"
+        ids = [v1]
+        try:
+            ids.extend(self.add(data, save_dir, paused=True, stopped=True))
+            deadline = time.monotonic() + 30
+            added = self.find(*ids)
+            while not added and time.monotonic() < deadline:
+                time.sleep(0.5)
+                added = self.find(*ids)
+            if not added:
+                raise RuntimeError("qBittorrent did not report the added torrent")
+            torrent_hash = added["hash"]
+            self.call("torrents/recheck", {"hashes": torrent_hash})
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                current = self.find(*ids, torrent_hash)
+                if not current:
+                    raise RuntimeError("qBittorrent removed the torrent during its recheck")
+                if "check" not in current.get("state", "").casefold():
+                    complete = current.get("amount_left") == 0 and current.get("progress", 0) >= 1
+                    if complete:
+                        try:
+                            self.call("torrents/start", {"hashes": torrent_hash})
+                        except urllib.error.HTTPError as error:
+                            if error.code != 404:
+                                raise
+                            self.call("torrents/resume", {"hashes": torrent_hash})
+                        return "seeding"
+                    self.remove(torrent_hash)
+                    return "incomplete"
+                time.sleep(2)
+            self.remove(torrent_hash)
+            return "incomplete"
+        except Exception:
+            with contextlib.suppress(Exception):
+                current = self.find(*ids)
+                if current:
+                    self.remove(current["hash"])
+            raise
+
+    def remove(self, torrent_hash):
+        """Remove a torrent but keep its files on disk."""
+        self.call("torrents/delete", {"hashes": torrent_hash, "deleteFiles": "false"})
 
     def force_start(self, v2):
         """Seed a v2 torrent even when the queue is full (qBittorrent queues past 3 active uploads by default).

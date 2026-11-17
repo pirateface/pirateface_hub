@@ -54,6 +54,17 @@ def request(url, timeout, *, method=None, headers=None, data=None):
 
 
 @functools.cache
+def search_models(query):
+    """Pirate Face's terminal model search (/s/<query>), as text lines, or None on failure."""
+    path = urllib.parse.quote(query, safe="").replace("%20", "+")
+    try:
+        with request(f"{API}/s/{path}", 30) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+
+
+@functools.cache
 def lookup(repo_id, quant=None):
     """Pirate Face's entry for the repo, NOT_LISTED, LICENSE_REQUIRED, or None for an answer we cannot use.
 
