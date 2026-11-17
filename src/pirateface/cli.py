@@ -8,6 +8,11 @@ import pirateface._boot  # noqa: F401  # uv tools skip .pth files
 
 _WORK_NAME = re.compile(r"[A-Za-z0-9._-]{1,24}")
 
+# How many files `pf download` fetches from the swarm at once. Set from a 1/4/8 timing rerun on the
+# fixed code, all runs 100% swarm, no "file too short": w8 mean 609 s / median 497 s vs w4 707/748
+# and w1 797/816, so 8 (huggingface_hub's own default) wins and is pinned here.
+SWARM_PARALLELISM = 8
+
 
 def _work_name(value):
     if not _WORK_NAME.fullmatch(value):
@@ -219,6 +224,8 @@ def _main():
 
     if args.hf_first:
         os.environ["PF_HF_FIRST"] = "1"
-    path = snapshot_download(args.repo_id, revision=args.revision, local_dir=args.local_dir)
+    path = snapshot_download(
+        args.repo_id, revision=args.revision, local_dir=args.local_dir, max_workers=SWARM_PARALLELISM
+    )
     ui.download_summary()
     print(path)
