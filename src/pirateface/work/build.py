@@ -66,7 +66,7 @@ class Lease:
         self._thread.join(timeout=2)
 
 
-def build(job, key, trackers, name=None, blocks=None):
+def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash).
     blocks: a proofs.BlockHashes to keep the block hashes in, or None."""
     repo, revision = job["repoId"], job["revision"]
@@ -76,6 +76,7 @@ def build(job, key, trackers, name=None, blocks=None):
     lease.renew()  # confirm we hold the lease before streaming
     lease.start()
     sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
+    rate_limiter = source.RateLimiter(max_download_rate) if max_download_rate is not None else None
 
     def on_read(n):
         lease.note(n)
@@ -88,7 +89,11 @@ def build(job, key, trackers, name=None, blocks=None):
         sums[path] = (digest, size)
 
     sources = [
-        (f["path"].split("/"), lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end)) for f in files
+        (
+            f["path"].split("/"),
+            lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end, rate_limiter),
+        )
+        for f in files
     ]
     try:
         data, v1, _v2 = hybrid.build_from(

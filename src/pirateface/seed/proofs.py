@@ -3,7 +3,8 @@
 While it hashes, the builder keeps every block hash in a temporary file: 32 bytes per 16 KiB block, about
 280 MB for a 140 GB model, on disk and never all in memory (pf work streams the files and cannot read them
 again). Once the .torrent is built, Pirate Face names random blocks. The answer is each block's sibling
-hashes, from its leaf up to its piece hash. The site fetches those blocks from Hugging Face and folds them
+hashes, from its leaf up to its piece hash, uploaded in parts of their own so the .torrent's upload limit
+never applies to them; the submission names the part count. The site fetches those blocks from Hugging Face and folds them
 up to the piece hash, so a torrent whose bytes differ from Hugging Face's is caught one block at a time.
 The temporary file is deleted when the submission ends. PF_NO_BLOCK_PROOFS=1 turns the proofs off.
 """
@@ -17,7 +18,7 @@ from pirateface.client import api
 from pirateface.config import flag
 from pirateface.seed.hybrid import BLOCK, ZERO
 
-MAX_BODY_BYTES = 4_300_000  # the site's request cap, under its host's 4.5 MB limit
+PART_BYTES = 1 << 20  # sibling hashes per upload: the most the site takes in one part
 
 
 class BlockHashes:
@@ -82,22 +83,25 @@ def sidecar():
 
 
 def answer(key, torrent, blocks):
-    """Ask the site which blocks to prove for this .torrent (bytes) and answer: base64 sibling hashes for the
-    blockProofs field. None when proofs are off or cannot be sent: the submission then goes without them."""
+    """Ask the site which blocks to prove for this .torrent (bytes), upload the answer in parts, and return the
+    fields to add to the submission ({"blockProofParts": n}). {} when proofs are off or the upload failed: the
+    submission then goes without them."""
     if blocks is None:
-        return None
-    encoded = base64.b64encode(torrent).decode()
+        return {}
     try:
-        status, challenge = api.submit(key, {"torrent": encoded}, "/api/block-challenge")
+        status, challenge = api.submit(key, {"torrent": base64.b64encode(torrent).decode()}, "/api/block-challenge")
         if status != 200:
             raise ValueError(f"HTTP {status}: {(challenge or {}).get('error', 'no challenge')}")
         picks = [(b["path"], b["block"]) for b in challenge["blocks"]]
-        proof = base64.b64encode(blocks.siblings(picks, challenge["pieceLength"])).decode()
+        siblings = blocks.siblings(picks, challenge["pieceLength"])
+        parts = [siblings[i : i + PART_BYTES] for i in range(0, len(siblings), PART_BYTES)] or [b""]
+        for n, part in enumerate(parts):
+            body = {"challengeId": challenge["challengeId"], "part": n, "siblings": base64.b64encode(part).decode()}
+            status, reply = api.submit(key, body, "/api/block-proofs")
+            if status != 200:
+                raise ValueError(f"part {n}: HTTP {status}: {(reply or {}).get('error', 'not saved')}")
     except Exception as e:  # proofs are optional on the site: say why and submit without them
         print(f"    block proofs skipped ({e})")
-        return None
-    if len(encoded) + len(proof) > MAX_BODY_BYTES:
-        print("    block proofs skipped (the .torrent and proofs are over the upload limit)")
-        return None
+        return {}
     print(f"    block proofs: {len(picks)} blocks")
-    return proof
+    return {"blockProofParts": len(parts)}

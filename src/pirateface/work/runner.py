@@ -44,7 +44,7 @@ def _job_size(job, max_bytes):
     return total
 
 
-def _process_job(job, key, trackers, name, max_bytes=None):
+def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=None):
     total = _job_size(job, max_bytes)
     ui.aligned(
         [
@@ -59,7 +59,7 @@ def _process_job(job, key, trackers, name, max_bytes=None):
     # another job can be leased before then.
     try:
         with proofs.sidecar() as blocks:
-            data, manifest, infohash = build.build(job, key, trackers, name, blocks)
+            data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
             if len(data) > MAX_UPLOAD_BYTES:
                 raise user.SeedError("the .torrent is over the 3 MB upload limit")
             block_proofs = proofs.answer(key, data, blocks)
@@ -86,7 +86,7 @@ def _process_job(job, key, trackers, name, max_bytes=None):
     return False
 
 
-def _work_once(key, trackers, name, max_bytes=None):
+def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
     """Take one new job. Returns None if none was queued, else True if listed, False if refused."""
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
@@ -95,10 +95,10 @@ def _work_once(key, trackers, name, max_bytes=None):
         raise WorkUnreachable(job["error"])
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
-    return _process_job(job, key, trackers, name, max_bytes)
+    return _process_job(job, key, trackers, name, max_bytes, max_download_rate)
 
 
-def _resume_once(key, trackers, name, saved, max_bytes=None):
+def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=None):
     """Renew and process the saved job. Returns None if the saved lease expired."""
     try:
         _job_size(saved["job"], max_bytes)
@@ -115,7 +115,7 @@ def _resume_once(key, trackers, name, saved, max_bytes=None):
     if status != 200:
         raise user.SeedError(f"could not resume lease ({status}): {(answer or {}).get('error', 'request failed')}")
     print(f"Resuming {saved['job'].get('repoId', 'saved job')}.")
-    return _process_job(saved["job"], key, trackers, name, max_bytes)
+    return _process_job(saved["job"], key, trackers, name, max_bytes, max_download_rate)
 
 
 def run(args):
@@ -127,6 +127,7 @@ def run(args):
         sys.exit(f"error: {e}")
     trackers = api.trackers(key)
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
+    max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000
     try:
         pending = state.load(args.name)
     except OSError as e:
@@ -135,13 +136,13 @@ def run(args):
     while True:
         try:
             if pending:
-                listed = _resume_once(key, trackers, args.name, pending, max_bytes)
+                listed = _resume_once(key, trackers, args.name, pending, max_bytes, max_download_rate)
                 if listed is None:
                     pending = None
                     continue
                 pending = None
             else:
-                listed = _work_once(key, trackers, args.name, max_bytes)
+                listed = _work_once(key, trackers, args.name, max_bytes, max_download_rate)
         except (WorkUnreachable, Oversize) as e:
             try:
                 pending = state.load(args.name)

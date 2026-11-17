@@ -18,6 +18,24 @@ WAIT_FOR = {408, 425, 429, 503}
 MAX_WAIT = 300.0
 
 
+class RateLimiter:
+    """Paces streamed bytes to a shared maximum rate."""
+
+    def __init__(self, bytes_per_second):
+        self._bytes_per_second = bytes_per_second
+        self._started = None
+        self._bytes_read = 0
+
+    def wait(self, count):
+        if self._started is None:
+            self._started = time.monotonic()
+        self._bytes_read += count
+        deadline = self._started + self._bytes_read / self._bytes_per_second
+        delay = deadline - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+
+
 def _wait(error, attempt):
     """Seconds to wait before trying again: Retry-After when Hugging Face sends one, else backoff."""
     header = getattr(error, "headers", None)
@@ -69,8 +87,9 @@ class Stream:
     16 KiB leaf), hashes what it returns, and reports the total when it ends. A connection that drops
     part way is reopened where it stopped (HTTP Range), so a long job survives a reset."""
 
-    def __init__(self, url, headers, path, on_read, on_end):
+    def __init__(self, url, headers, path, on_read, on_end, rate_limiter=None):
         self.url, self.headers, self.path, self.on_read, self.on_end = url, headers, path, on_read, on_end
+        self.rate_limiter = rate_limiter
         self.sha, self.size, self.ended, self.drops = hashlib.sha256(), 0, False, 0
         self.resp, self.length = _open(url, headers, path)
 
@@ -101,6 +120,8 @@ class Stream:
             if part:
                 buf += part
                 self.drops = 0
+                if self.rate_limiter is not None:
+                    self.rate_limiter.wait(len(part))
                 continue
             at = self.size + len(buf)
             if error is None and (self.length is None or at >= self.length):
@@ -116,7 +137,7 @@ class Stream:
         return bytes(buf)
 
 
-def open_file(repo, revision, path, on_read, on_end):
+def open_file(repo, revision, path, on_read, on_end, rate_limiter=None):
     """A Stream for one file."""
     url = f"{HF}/{repo}/resolve/{urllib.parse.quote(revision)}/{urllib.parse.quote(path)}"
-    return Stream(url, hub.headers(), path, on_read, on_end)
+    return Stream(url, hub.headers(), path, on_read, on_end, rate_limiter)
