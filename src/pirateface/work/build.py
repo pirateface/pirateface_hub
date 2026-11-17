@@ -66,8 +66,9 @@ class Lease:
         self._thread.join(timeout=2)
 
 
-def build(job, key, trackers, name=None):
-    """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash)."""
+def build(job, key, trackers, name=None, blocks=None):
+    """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash).
+    blocks: a proofs.BlockHashes to keep the block hashes in, or None."""
     repo, revision = job["repoId"], job["revision"]
     files = sorted(job["files"], key=lambda f: hybrid.torrent_order(f["path"].split("/")))
     total = sum(f["size"] for f in files)
@@ -90,7 +91,9 @@ def build(job, key, trackers, name=None):
         (f["path"].split("/"), lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end)) for f in files
     ]
     try:
-        data, v1, _v2 = hybrid.build_from(repo.split("/")[1], sources, trackers, hybrid.piece_length(total))
+        data, v1, _v2 = hybrid.build_from(
+            repo.split("/")[1], sources, trackers, hybrid.piece_length(total), blocks=blocks
+        )
     finally:
         lease.stop()
     lease.renew()  # the last renewal before the result is submitted

@@ -11,7 +11,7 @@ from pathlib import Path
 from pirateface import ui
 from pirateface.client import api
 from pirateface.config import API, MAX_UPLOAD_BYTES, SEEDS
-from pirateface.seed import clients, hub, hybrid, package, user
+from pirateface.seed import clients, hub, hybrid, package, proofs, user
 from pirateface.seed.per_file.command import seed_model
 from pirateface.seed.user import SeedError
 
@@ -70,8 +70,9 @@ def check_client_version():
         )
 
 
-def build_torrent(src, save_dir, name, trackers):
-    """Stage src's files under save_dir/name, hash them and make the torrent. Returns (paths, sha256s, torrent, v1, v2)."""
+def build_torrent(src, save_dir, name, trackers, blocks=None):
+    """Stage src's files under save_dir/name, hash them and make the torrent. Returns (paths, sha256s, torrent, v1, v2).
+    blocks: a proofs.BlockHashes to keep the block hashes in, or None."""
     print(f"==> Selecting files in {src}")
     paths, skipped = package.stage(src, save_dir / name)
     for p in skipped:
@@ -81,7 +82,7 @@ def build_torrent(src, save_dir, name, trackers):
     print(f"    {len(paths)} files included, {len(skipped)} skipped")
     print("==> Hashing and creating the torrent")
     sums = {}  # SHA-256 of each file, filled by the same read that hashes the pieces
-    data, v1, v2 = hybrid.build(save_dir / name, trackers, sums=sums)
+    data, v1, v2 = hybrid.build(save_dir / name, trackers, sums=sums, blocks=blocks)
     return paths, sums, data, v1, v2
 
 
@@ -191,8 +192,9 @@ def request_body(repo, revision, lic, evidence, sums, data, v1, v2, readme, web_
     return body
 
 
-def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path):
-    """Ask for the submission terms, POST, and say what the answer means."""
+def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path, proof=None):
+    """Ask for the submission terms, POST, and say what the answer means. proof() answers the site's block
+    challenge once the terms are accepted: the .torrent goes to the site only after yes."""
     print(f"""
 ==> Submitting {repo} ({lic}, {len(paths)} files) to {API}. By typing yes you confirm:
     1. You have the complete files and the right to redistribute them.
@@ -203,6 +205,8 @@ def confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path):
     5. You agree to the Terms ({API}/terms#model-torrent-submissions) and Listing policy ({API}/policy).""")
     if not user.YES and user.ask("    Type yes: ") != "yes":
         raise SeedError(f"not submitted. Your torrent is in {out}; rerun any time")
+    if proof and (block_proofs := proof()):
+        body["blockProofs"] = block_proofs
 
     code, answer = api.submit(key, body)
     result = answer.get("status") or answer.get("error") or answer
@@ -258,34 +262,35 @@ def submit_new(
     # so the infohash is the same with or without a key.
     trackers = api.trackers(key) if key else api.TRACKERS
 
-    paths, sums, data, v1, v2 = build_torrent(src, save_dir, name, trackers)
-    torrent_path = out / f"{name}.torrent"
-    torrent_path.write_bytes(data)
+    with proofs.sidecar() as blocks:
+        paths, sums, data, v1, v2 = build_torrent(src, save_dir, name, trackers, blocks)
+        torrent_path = out / f"{name}.torrent"
+        torrent_path.write_bytes(data)
 
-    try:
-        licenses = api.licenses()
-    except OSError as e:
-        raise SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
-    match = None
-    if direct:
-        # Direct listing: not on Hugging Face. The revision is the torrent's v1 infohash.
-        print("==> Direct listing: skipping the Hugging Face check")
-        revision, hf_license = revision or v1, license or "-"
-    else:
-        match, revision, hf_license = check_hugging_face(repo, revision, license, sums, licenses, answers)
-    lic = choose_license(repo, hf_license, sums, licenses, answers)
-    evidence = evidence_for(repo, revision, lic, match, direct, command, answers)
-    body = request_body(repo, revision, lic, evidence, sums, data, v1, v2, save_dir / name / "README.md", web_seed)
+        try:
+            licenses = api.licenses()
+        except OSError as e:
+            raise SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
+        match = None
+        if direct:
+            # Direct listing: not on Hugging Face. The revision is the torrent's v1 infohash.
+            print("==> Direct listing: skipping the Hugging Face check")
+            revision, hf_license = revision or v1, license or "-"
+        else:
+            match, revision, hf_license = check_hugging_face(repo, revision, license, sums, licenses, answers)
+        lic = choose_license(repo, hf_license, sums, licenses, answers)
+        evidence = evidence_for(repo, revision, lic, match, direct, command, answers)
+        body = request_body(repo, revision, lic, evidence, sums, data, v1, v2, save_dir / name / "README.md", web_seed)
 
-    if dry_run:
-        print_dry_run(body, data, v1, v2, torrent_path, answers.skipped)
-        return
+        if dry_run:
+            print_dry_run(body, data, v1, v2, torrent_path, answers.skipped)
+            return
 
-    # Seed first: a listed magnet is only useful if someone is sharing the files.
-    start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True, per_file=per_file)
-    confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path)
-    if per_file:
-        seed_model(data, save_dir, v1, verified=True)  # build_torrent just hashed every file
+        # Seed first: a listed magnet is only useful if someone is sharing the files.
+        start_seeding(repo, data, save_dir, v1, v2, name, trackers, torrent_path, wait=True, per_file=per_file)
+        confirm_and_post(repo, src, key, body, lic, paths, out, torrent_path, lambda: proofs.answer(key, data, blocks))
+        if per_file:
+            seed_model(data, save_dir, v1, verified=True)  # build_torrent just hashed every file
 
 
 def print_dry_run(body, data, v1, v2, torrent_path, skipped):

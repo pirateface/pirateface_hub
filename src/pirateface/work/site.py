@@ -53,15 +53,9 @@ def renew(key, lease_id, bytes_done=None, bytes_total=None, name=None):
     return request("POST", "/api/work/lease", key, body, timeout=30)
 
 
-def complete(key, lease_id, torrent, manifest):
-    """Post the .torrent (bytes) and the per-file SHA-256 manifest for a job."""
-    return request(
-        "POST",
-        "/api/work/complete",
-        key,
-        {
-            "leaseId": lease_id,
-            "torrent": base64.b64encode(torrent).decode(),
-            "manifest": manifest,
-        },
-    )
+def complete(key, lease_id, torrent, manifest, block_proofs=None):
+    """Post the .torrent (bytes), the per-file SHA-256 manifest and the block proofs (base64, or None) for a job."""
+    body = {"leaseId": lease_id, "torrent": base64.b64encode(torrent).decode(), "manifest": manifest}
+    if block_proofs:
+        body["blockProofs"] = block_proofs
+    return request("POST", "/api/work/complete", key, body)
