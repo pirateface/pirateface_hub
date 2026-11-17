@@ -14,7 +14,7 @@ Or without installing:
 uv run -p 3.13 --with pirateface python your_script.py
 ```
 
-Anything that downloads through `huggingface_hub` (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual.
+Anything that downloads through `huggingface_hub` (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual. Set `PF_HF_FIRST=1` to reverse the order: each file comes from Hugging Face first and only falls back to the swarm when Hugging Face fails.
 
 Needs Python 3.12 or 3.13. With `uvx`, pass `-p 3.13`.
 
@@ -84,6 +84,7 @@ pf index --sync   # mirror the build the site names, replacing copies the build 
 | `TR_HOST`, `TR_AUTH` | Transmission RPC (default `localhost:9091`), `user:pass` |
 | `HF_TOKEN` | For gated repos |
 | `PF_DISABLE` | Set to `1` to turn the download hook off |
+| `PF_HF_FIRST` | `1` = download from Hugging Face first, swarm only when it fails |
 
 ## Development
 

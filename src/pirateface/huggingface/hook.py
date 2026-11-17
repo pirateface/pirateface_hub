@@ -1,5 +1,6 @@
 """Swap huggingface_hub's file download for a torrent download, checked against Hugging Face's fingerprint."""
 
+import contextlib
 import contextvars
 import functools
 import hashlib
@@ -38,6 +39,15 @@ def install(file_download):
         if dest.exists() and not bound.get("force_download"):
             return original(*args, **kwargs)
         name = bound["filename"]
+        if config.flag("PF_HF_FIRST"):
+            try:
+                return original(*args, **kwargs)
+            except Exception:
+                log(f"{name}: Hugging Face failed; the file is coming from the swarm")
+                with contextlib.suppress(Exception):
+                    if _from_torrent(name, bound["etag"], dest):
+                        return None
+                raise
         try:
             if _from_torrent(name, bound["etag"], dest):
                 return None
