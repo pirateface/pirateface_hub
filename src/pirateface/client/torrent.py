@@ -60,6 +60,8 @@ def _get_session():
                 # The torrent goes "finished" between files and drops the web seed; reconnect in 2s, not 30s.
                 # Keep close_redundant_connections on: idle web seeds otherwise never request the next file.
                 "urlseed_wait_retry": 2,
+                # The tracker hands out a 60s interval to peers that are moving data; libtorrent's default floor is 300s.
+                "min_announce_interval": 60,
             }
         )
         threading.Thread(target=_pump_alerts, args=(_session, debug), daemon=True).start()
