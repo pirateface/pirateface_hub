@@ -61,10 +61,11 @@ class Entry:
     magnet: str
     infohash: str
     build: str  # the shard date this magnet was last written in
+    commit: str | None  # from the web seed's path, when it names a full commit
 
 
-def repo_id_of(magnet):
-    """The repo id from a magnet's web seed (ws=https://pirateface.co/api/ws/OWNER/NAME/REV/), or None.
+def web_seed(magnet):
+    """(repo id, commit or None) from a magnet's web seed (ws=https://pirateface.co/api/ws/OWNER/NAME/REV/), or None.
 
     The shards hold bare magnets with no repo name on them: the web seed's path is the only place the
     model id appears, so a magnet without one cannot be looked up and is skipped.
@@ -87,7 +88,8 @@ def repo_id_of(magnet):
     if len(parts) < 4 or parts[0] != "api" or parts[1] != "ws":
         return None
     repo = f"{parts[2]}/{parts[3]}"
-    return repo if _REPO.fullmatch(repo) else None
+    commit = parts[4] if len(parts) > 4 and _COMMIT.fullmatch(parts[4]) else None
+    return (repo, commit) if _REPO.fullmatch(repo) else None
 
 
 def _ws_hosts():
@@ -168,10 +170,10 @@ def _parsed():
             return {}, True
         for line in _lines(SHARDS / f"{date}.txt") or []:
             magnet = line.strip()
-            repo_id = repo_id_of(magnet) if magnet else None
-            infohash = infohash_of(magnet) if repo_id else None
-            if repo_id and infohash:
-                found[repo_id] = Entry(magnet, infohash, date)
+            seed = web_seed(magnet) if magnet else None
+            infohash = infohash_of(magnet) if seed else None
+            if seed and infohash:
+                found[seed[0]] = Entry(magnet, infohash, date, seed[1])
         for repo_id in [repo for repo, entry in found.items() if entry.infohash in gone]:
             del found[repo_id]
     return found, False
@@ -237,11 +239,7 @@ def listing(repo_id):
     piece downloaded only once its hash matches, so the torrent's own hashes are the check.
     """
     entry = resolve(repo_id)
-    if entry is None:
-        return None
-    ws = urllib.parse.parse_qs(urllib.parse.urlparse(entry.magnet).query)["ws"][0]  # resolve() checked it
-    parts = [part for part in urllib.parse.urlparse(ws).path.split("/") if part]
-    if len(parts) < 5 or not _COMMIT.fullmatch(parts[4]):
+    if entry is None or entry.commit is None:
         return None
     try:
         files = torrent.swarm_files(repo_id, magnet=entry.magnet, where="the cached index")
@@ -249,7 +247,7 @@ def listing(repo_id):
         return None
     return {
         "repo_id": repo_id,
-        "commit": parts[4],
+        "commit": entry.commit,
         "files": {path: (size, None, None) for path, size in files},
         "trust": f"the cached index (build {entry.build}): infohash {entry.infohash}",
     }
@@ -326,7 +324,7 @@ def _remote_magnet():
     return state().get("magnet") or BOOTSTRAP_MAGNET
 
 
-def sync(stall_timeout=None):
+def sync():
     """Mirror the index torrent's shards into PF_CACHE/index/shards/ and return the build date.
 
     Needs no API: the bootstrap magnet carries its own trackers. The shards are copied out of the
@@ -365,7 +363,7 @@ def sync(stall_timeout=None):
                     if dest.name not in digests:
                         digests[dest.name] = _digest(dest)
                     continue
-                src = torrent.fetch_file(INDEX_REPO, name, stall_timeout or config.STALL_TIMEOUT, magnet=magnet)
+                src = torrent.fetch_file(INDEX_REPO, name, magnet=magnet)
                 tmp = dest.with_name(f"{dest.name}.{os.getpid()}.part")
                 try:
                     shutil.copyfile(src, tmp)

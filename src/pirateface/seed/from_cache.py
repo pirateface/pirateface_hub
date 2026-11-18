@@ -203,31 +203,23 @@ def _candidate(repo, quant, entry, data, blobs, snapshots):
 
 def _listings(repos, blobs, snapshots):
     found = {}
-    for repo in tqdm(sorted(repos, key=str.casefold), desc="Checking Pirate Face listings", unit="repo"):
-        try:
+    try:
+        for repo in tqdm(sorted(repos, key=str.casefold), desc="Checking Pirate Face listings", unit="repo"):
             base = api.lookup(repo)
-        except api.Unreachable as error:
-            raise SeedError(f"could not reach {API}") from error
-        if not isinstance(base, dict):
-            continue
-        listed_quants = base.get("quants") or [base]
-        for listed in listed_quants:
-            quant = listed.get("quant") if isinstance(listed, dict) else None
-            try:
+            for listed in (base.get("quants") or [base]) if isinstance(base, dict) else []:
+                quant = listed.get("quant") if isinstance(listed, dict) else None
                 entry = api.lookup(repo, quant) if quant else base
-                if not isinstance(entry, dict):
+                data = api.torrent_file(repo, quant) if isinstance(entry, dict) else None
+                if not data:
                     continue
-                data = api.torrent_file(repo, quant)
-            except api.Unreachable as error:
-                raise SeedError(f"could not reach {API}") from error
-            if not data:
-                continue
-            try:
-                candidate = _candidate(repo, quant, entry, data, blobs, snapshots)
-            except torrent.Unsafe:
-                continue
-            if candidate:
-                found.setdefault(candidate.v1, candidate)
+                try:
+                    candidate = _candidate(repo, quant, entry, data, blobs, snapshots)
+                except torrent.Unsafe:
+                    continue
+                if candidate:
+                    found.setdefault(candidate.v1, candidate)
+    except api.Unreachable as error:
+        raise SeedError(f"could not reach {API}") from error
     return sorted(found.values(), key=lambda item: (item.repo.casefold(), item.quant or ""))
 
 
@@ -288,15 +280,15 @@ def seed_from_cache(per_file=True):
         raise SeedError(str(error)) from error
     except Exception as error:
         raise SeedError(f"qBittorrent is not reachable; configure its Web UI ({clients.HELP})") from error
-    key = None
+    trackers = None
     for candidate in candidates:
         if not user.YES and not user.ask(
             f"==> Seed {candidate.repo} ({candidate.seeders} seeds)? [y/N] "
         ).lower().startswith("y"):
             continue
-        if key is None:
-            key = user.load_key()
+        if trackers is None:
+            trackers = api.trackers(user.load_key())
         try:
-            _seed(candidate, qbt, api.trackers(key), per_file)
+            _seed(candidate, qbt, trackers, per_file)
         except (OSError, package.LinkError, RuntimeError) as error:
             print(f"    Could not seed {candidate.repo}: {error}", file=sys.stderr)

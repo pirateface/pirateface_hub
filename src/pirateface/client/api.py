@@ -111,7 +111,6 @@ def _torrent(path):
     return data if status < 400 and len(data) <= MAX_TORRENT_BYTES else None
 
 
-@functools.cache
 def search_models(query):
     """Pirate Face's terminal model search (/s/<query>), as text lines, or None on failure."""
     path = urllib.parse.quote(query, safe="").replace("%20", "+")

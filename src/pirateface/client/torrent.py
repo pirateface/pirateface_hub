@@ -259,7 +259,7 @@ def _handle(repo_id, resume=None, magnet=None, where=None):
     _remember(repo_id, h)
     threading.Thread(target=_show_status, args=(repo_id, h), daemon=True).start()
     fs = h.torrent_file().files()
-    real = [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
+    real = real_files(fs)
     if where is None:
         where = "the cached index" if from_index else "Pirate Face"
     ui.banner(repo_id, len(real), sum(fs.file_size(i) for i in real), where)
@@ -358,6 +358,11 @@ def _show_status(repo_id, h, every=0.5, recent=3.0):
             return
 
 
+def real_files(fs):
+    """The indices of fs's files, BEP 47 pad files left out."""
+    return [i for i in range(fs.num_files()) if not fs.file_flags(i) & fs.flag_pad_file]
+
+
 def _relative(ti, i):
     """The entry's path inside the torrent's folder (libtorrent prefixes the torrent name, and on Windows
     returns backslashes). The single place a torrent path becomes a relative one."""
@@ -385,12 +390,7 @@ def swarm_files(repo_id, magnet=None, where=None):
         if h is None:
             raise Unavailable()
         ti = h.torrent_file()
-        fs = ti.files()
-        files = []
-        for i in range(fs.num_files()):
-            if not fs.file_flags(i) & fs.flag_pad_file:
-                files.append((_relative(ti, i), fs.file_size(i)))
-        return files
+        return [(_relative(ti, i), ti.files().file_size(i)) for i in real_files(ti.files())]
 
 
 def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=None):
