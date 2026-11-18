@@ -8,7 +8,7 @@ from pirateface.client import api
 from pirateface.config import API, MAX_UPLOAD_BYTES
 from pirateface.seed import proofs, user
 from pirateface.work import build, site, state
-from pirateface.work.errors import Oversize, WorkError, WorkUnreachable
+from pirateface.work.errors import LeaseLost, Oversize, WorkError, WorkUnreachable
 
 WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
 WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-minute pause is safe
@@ -17,9 +17,9 @@ WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-min
 def _consent():
     print(f"""
 ==> pf work: you build the torrent for one queued model at a time. Its files are streamed from
-    Hugging Face through memory; no model bytes are written to disk. Only their 16 KiB block hashes
-    are kept in a temporary file until the torrent is submitted. A private checkpoint with the lease
-    and file metadata is saved so an interrupted run can resume. The torrent is listed on Pirate Face under your
+    Hugging Face through memory; no model bytes are written to disk. A private checkpoint keeps the
+    lease and the hashes of each finished file (16 KiB block hashes included) until the job ends, so an
+    interrupted run resumes at the file it was reading. The torrent is listed on Pirate Face under your
     account. Verified work earns points: see {API}/how-it-works.
     Terms: {API}/terms#model-torrent-submissions""")
     if not user.YES and user.ask("    Type yes to start: ") != "yes":
@@ -57,15 +57,15 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
     state.save(job, name)
     # A failed build raises after giving the lease back, so the next lease call takes a job at once.
     try:
-        with proofs.sidecar() as blocks:
+        with proofs.sidecar(state.blocks_path(name)) as blocks:
             data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
             if len(data) > MAX_UPLOAD_BYTES:
                 raise user.SeedError("the .torrent is over the 3 MB upload limit")
             block_proofs = proofs.answer(key, data, blocks)
     except WorkUnreachable:
         raise
-    except (WorkError, user.SeedError):
-        state.clear(name)
+    except (WorkError, user.SeedError) as e:
+        state.clear(name, files=not isinstance(e, LeaseLost))
         site.release(key, job["leaseId"])  # best effort: unanswered, the lease lapses on its own
         raise
     status, answer = site.complete(key, job["leaseId"], data, manifest, block_proofs)
@@ -104,11 +104,11 @@ def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=N
     try:
         _job_size(saved["job"], max_bytes)
     except Oversize:
-        state.clear(name)
+        state.clear(name, files=False)
         raise
     status, answer = site.renew(key, saved["leaseId"])
     if status == 410:
-        state.clear(name)
+        state.clear(name, files=False)  # the job may be leased again: keep its finished files
         print("Saved lease expired; taking a new job.", file=sys.stderr)
         return None
     if site.transient(status):
