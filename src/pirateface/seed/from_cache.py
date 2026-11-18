@@ -286,7 +286,7 @@ def seed_from_cache(per_file=True):
             f"==> Seed {candidate.repo} ({candidate.seeders} seeds)? [y/N] "
         ).lower().startswith("y"):
             continue
-        if trackers is None or trackers is api.TRACKERS:  # share a fetched list; after the fallback, ask again
+        if trackers in (None, api.TRACKERS):  # share a real answer; after the built-in fallback list, ask again
             key = key or user.load_key()
             trackers = api.trackers(key)
         try:
