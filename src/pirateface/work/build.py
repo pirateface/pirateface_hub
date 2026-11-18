@@ -1,16 +1,15 @@
 """Builds one job's hybrid torrent by streaming its files, and checks the result against the job."""
 
-import sys
 import threading
 import time
 
+from pirateface import ui
 from pirateface.seed import hybrid
 from pirateface.work import site, source
 from pirateface.work.errors import WorkError
 
 RENEW_SECONDS = 10  # the rescue board reads this; the site drops a lease after 10 minutes without one
 RENEW_UNREACHABLE_SECONDS = 300  # half the lease lapse: beyond this a lost lease can't be renewed
-REPORT_BYTES = 1 << 30
 
 
 class Lease:
@@ -75,15 +74,13 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     lease = Lease(key, job["leaseId"], total, name)
     lease.renew()  # confirm we hold the lease before streaming
     lease.start()
-    sums, progress = {}, {"bytes": 0, "next": REPORT_BYTES}
+    sums = {}
+    progress = ui.work_progress(total)
     rate_limiter = source.RateLimiter(max_download_rate) if max_download_rate is not None else None
 
     def on_read(n):
         lease.note(n)
-        progress["bytes"] += n
-        if progress["bytes"] >= progress["next"]:
-            progress["next"] += REPORT_BYTES
-            print(f"    {progress['bytes'] / 1e9:.1f} of {total / 1e9:.1f} GB", file=sys.stderr)
+        progress.update(n)
 
     def on_end(path, digest, size):
         sums[path] = (digest, size)
@@ -101,6 +98,7 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
         )
     finally:
         lease.stop()
+        progress.close()
     lease.renew()  # the last renewal before the result is submitted
     for f in files:
         digest, size = sums.get(f["path"], (None, None))

@@ -48,10 +48,10 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
     total = _job_size(job, max_bytes)
     ui.aligned(
         [
-            ("leased", job["repoId"]),
             ("revision", job["revision"][:12]),
             ("files", str(len(job["files"]))),
             ("size", f"{total / 1e9:.2f} GB"),
+            ("leased", job["repoId"]),
         ]
     )
     state.save(job, name)
