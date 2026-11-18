@@ -1,6 +1,6 @@
 # Pirate Face CLI
 
-Downloads Hugging Face models over BitTorrent from [Pirate Face](https://pirateface.co) seeders. Your code stays the same.
+Downloads HF models over BitTorrent from [Pirate Face](https://pirateface.co) seeders. Your code stays the same.
 
 ## Install
 
@@ -14,7 +14,7 @@ Or without installing:
 uv run -p 3.13 --with pirateface python your_script.py
 ```
 
-Anything that downloads through `huggingface_hub` (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual. Set `PF_HF_FIRST=1` to reverse the order: each file comes from Hugging Face first and only falls back to the swarm when Hugging Face fails.
+Anything that downloads through HF (transformers, diffusers, `hf download`) now pulls from the swarm. Every file is checked against Hugging Face's hash. If a model isn't on Pirate Face or a peer stalls, that file comes from Hugging Face as usual. Set `PF_HF_FIRST=1` to reverse the order: each file comes from Hugging Face first and only falls back to the swarm when Hugging Face fails.
 
 Needs Python 3.12 or 3.13. With `uvx`, pass `-p 3.13`.
 
