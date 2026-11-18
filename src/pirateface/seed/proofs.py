@@ -1,17 +1,19 @@
 """Block proofs: tie single 16 KiB blocks to the v2 piece hashes in the .torrent (BEP 52 hash trees).
 
-While it hashes, the builder keeps every block hash in a temporary file: 32 bytes per 16 KiB block, about
+While it hashes, the builder keeps every block hash in a file: 32 bytes per 16 KiB block, about
 280 MB for a 140 GB model, on disk and never all in memory (pf work streams the files and cannot read them
 again). Once the .torrent is built, Pirate Face names random blocks. The answer is each block's sibling
 hashes, from its leaf up to its piece hash, uploaded in parts of their own so the .torrent's upload limit
 never applies to them; the submission names the part count. The site fetches those blocks from Hugging Face and folds them
 up to the piece hash, so a torrent whose bytes differ from Hugging Face's is caught one block at a time.
-The temporary file is deleted when the submission ends. PF_NO_BLOCK_PROOFS=1 turns the proofs off.
+The file is deleted when the submission ends; pf work keeps it in its checkpoint until the job ends.
+PF_NO_BLOCK_PROOFS=1 turns the proofs off.
 """
 
 import base64
 import contextlib
 import hashlib
+import os
 import tempfile
 
 from pirateface.client import api
@@ -22,10 +24,14 @@ PART_BYTES = 1 << 20  # sibling hashes per upload: the most the site takes in on
 
 
 class BlockHashes:
-    """Every block hash of one build, in torrent order, in a temporary file deleted on close."""
+    """Every block hash of one build, in the order the files were read, in a file (temporary unless path is given)."""
 
-    def __init__(self):
-        self._file = tempfile.TemporaryFile(prefix="pf-blocks-")  # noqa: SIM115  # closed by __exit__
+    def __init__(self, path=None):
+        """path: a file kept across runs (pf work's checkpoint, which deletes it), else a temporary file."""
+        if path is None:
+            self._file = tempfile.TemporaryFile(prefix="pf-blocks-")  # noqa: SIM115  # closed by __exit__
+        else:
+            self._file = os.fdopen(os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600), "a+b")
         self._files = {}  # path -> [index of its first block hash, block count]
         self._count = 0
 
@@ -43,6 +49,17 @@ class BlockHashes:
         self._count += 1
         self._current[1] += 1
 
+    def keep(self, files):
+        """Start after the hashes an earlier run left in the file for files, [(path, block count)] in the order
+        they were written, and drop anything after them."""
+        self._file.truncate(32 * sum(count for _, count in files))
+        for path, count in files:
+            self._files[path] = [self._count, count]
+            self._count += count
+
+    def flush(self):
+        self._file.flush()
+
     def _levels(self, first, count, width):
         """The hash tree over count block hashes from first, padded with zero hashes to width: leaves first."""
         self._file.seek(32 * first)
@@ -58,7 +75,7 @@ class BlockHashes:
         """The sibling hashes, leaf to piece hash, of each (path, block) in picks, concatenated. The tree is
         the block's piece for a file longer than one piece, else the whole file (its pieces root). The site
         sends picks in torrent order, so blocks of one piece follow each other and share one tree."""
-        self._file.flush()
+        self.flush()
         per_piece, out, tree, levels = plen // BLOCK, bytearray(), None, []
         for path, block in picks:
             first, count = self._files[path]
@@ -77,9 +94,9 @@ class BlockHashes:
         return bytes(out)
 
 
-def sidecar():
-    """A BlockHashes for one build, or None (as a context) when PF_NO_BLOCK_PROOFS is set."""
-    return contextlib.nullcontext() if flag("PF_NO_BLOCK_PROOFS") else BlockHashes()
+def sidecar(path=None):
+    """A BlockHashes for one build, or None (as a context) when PF_NO_BLOCK_PROOFS is set. path: as for BlockHashes."""
+    return contextlib.nullcontext() if flag("PF_NO_BLOCK_PROOFS") else BlockHashes(path)
 
 
 def answer(key, torrent, blocks):

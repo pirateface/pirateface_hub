@@ -116,55 +116,69 @@ def build(root, trackers, plen=None, sums=None, blocks=None):
     return build_from(root.absolute().name, from_folder(root, paths), trackers, plen, sums, blocks)
 
 
-def build_from(name, sources, trackers, plen, sums=None, blocks=None):
+def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None, on_file=None):
     """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (from_folder sorts them).
 
     opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
     except the last must return exactly BLOCK bytes: each read is hashed as one v2 leaf. Nothing is kept,
     so a source can be a network stream. Returns (bytes, v1 hex, v2 hex). sums: as for build().
     blocks: a proofs.BlockHashes that keeps every block hash, for the block proofs after submitting.
+    done: {path: (size, pieces root, piece layer, v1 piece hashes)} of files hashed by an earlier run, used
+    instead of opening them (b"" for an absent root or layer). on_file(path, that tuple) is called as each
+    file is finished on a piece boundary (every file once pads are added), so a run can be resumed there.
     """
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
     v1 = _V1Pieces(plen)
-    files, tree, layers, pad_index = [], {}, {}, 0
+    files, tree, layers, pad_index, padded = [], {}, {}, 0, len(sources) > 1
     for parts, opener in sources:
-        size, leaves, piece_roots = 0, [], []
-        whole = hashlib.sha256() if sums is not None else None
-        if blocks is not None:
-            blocks.begin("/".join(parts))
-        with opener() as f:
-            while block := f.read(BLOCK):
-                size += len(block)
-                v1.add(block)
-                if whole:
-                    whole.update(block)
-                leaves.append(hashlib.sha256(block).digest())
-                if blocks is not None:
-                    blocks.add(leaves[-1])
-                if len(leaves) == per_piece:
-                    piece_roots.append(_merkle(leaves, ZERO))
-                    leaves = []
-        if whole:
-            sums["/".join(parts)] = whole.hexdigest()
+        path = "/".join(parts)
+        if done and path in done:
+            size, root, layer, pieces = done[path]
+            v1.done += [pieces[i : i + 20] for i in range(0, len(pieces), 20)]
+        else:
+            first, size, leaves, piece_roots, root, layer = len(v1.done), 0, [], [], b"", b""
+            whole = hashlib.sha256() if sums is not None else None
+            if blocks is not None:
+                blocks.begin(path)
+            with opener() as f:
+                while block := f.read(BLOCK):
+                    size += len(block)
+                    v1.add(block)
+                    if whole:
+                        whole.update(block)
+                    leaves.append(hashlib.sha256(block).digest())
+                    if blocks is not None:
+                        blocks.add(leaves[-1])
+                    if len(leaves) == per_piece:
+                        piece_roots.append(_merkle(leaves, ZERO))
+                        leaves = []
+            if whole:
+                sums[path] = whole.hexdigest()
+            if size > plen:
+                if leaves:
+                    piece_roots.append(_merkle(leaves + [ZERO] * (per_piece - len(leaves)), ZERO))
+                root = _merkle(piece_roots, piece_pad)
+                layer = b"".join(piece_roots)
+            elif size:
+                root = piece_roots[0] if piece_roots else _merkle(leaves, ZERO)
+            v1.add(bytes(-size % plen if padded else 0))
+            if on_file and not v1.filled:
+                on_file(path, (size, root, layer, b"".join(v1.done[first:])))
         entry = {"length": size}
-        if size > plen:
-            if leaves:
-                piece_roots.append(_merkle(leaves + [ZERO] * (per_piece - len(leaves)), ZERO))
-            entry["pieces root"] = _merkle(piece_roots, piece_pad)
-            layers[entry["pieces root"]] = b"".join(piece_roots)
-        elif size:
-            entry["pieces root"] = piece_roots[0] if piece_roots else _merkle(leaves, ZERO)
+        if root:
+            entry["pieces root"] = root
+        if layer:
+            layers[root] = layer
         node = tree
         for p in parts:
             node = node.setdefault(p, {})
         node[""] = entry
         files.append({"length": size, "path": parts})
         pad = -size % plen
-        if pad and len(sources) > 1:
+        if pad and padded:
             pad_index += 1
             files.append({"attr": "p", "length": pad, "path": [".pad", f"{pad_index}-{pad}"]})
-            v1.add(bytes(pad))
     info = {
         "file tree": tree,
         "files": files,

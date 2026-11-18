@@ -5,8 +5,8 @@ import time
 
 from pirateface import ui
 from pirateface.seed import hybrid
-from pirateface.work import site, source
-from pirateface.work.errors import WorkError
+from pirateface.work import site, source, state
+from pirateface.work.errors import LeaseLost, WorkError
 
 RENEW_SECONDS = 10  # the rescue board reads this; the site drops a lease after 10 minutes without one
 RENEW_UNREACHABLE_SECONDS = 300  # half the lease lapse: beyond this a lost lease can't be renewed
@@ -45,12 +45,12 @@ class Lease:
             if self._down_since is None:
                 self._down_since = time.monotonic()
             if time.monotonic() - self._down_since > RENEW_UNREACHABLE_SECONDS:
-                raise WorkError(
+                raise LeaseLost(
                     f"the site has been unreachable for {RENEW_UNREACHABLE_SECONDS // 60} minutes; "
                     "the lease has lapsed and the request is back in the queue"
                 )
             return  # within the grace window: keep renewing on the timer
-        raise WorkError(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
+        raise LeaseLost(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
 
     def note(self, n):
         self.done += n
@@ -67,14 +67,19 @@ class Lease:
 
 def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash).
-    blocks: a proofs.BlockHashes to keep the block hashes in, or None."""
+    blocks: a proofs.BlockHashes to keep the block hashes in, or None. Files an earlier run of this job finished
+    are taken from the lane's checkpoint instead of Hugging Face, and each file finished now is added to it."""
     repo, revision = job["repoId"], job["revision"]
     files = sorted(job["files"], key=lambda f: hybrid.torrent_order(f["path"].split("/")))
     total = sum(f["size"] for f in files)
+    plen, proofs = hybrid.piece_length(total), blocks is not None
+    done = state.load_files(job, plen, proofs, name)
+    if blocks is not None:
+        blocks.keep([(f["path"], -(-f["size"] // hybrid.BLOCK)) for f in done])
     lease = Lease(key, job["leaseId"], total, name)
     lease.renew()  # confirm we hold the lease before streaming
     lease.start()
-    sums = {}
+    sums = {f["path"]: (f["sha256"], f["size"]) for f in done}
     progress = ui.work_progress(total)
     rate_limiter = source.RateLimiter(max_download_rate) if max_download_rate is not None else None
 
@@ -85,6 +90,17 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     def on_end(path, digest, size):
         sums[path] = (digest, size)
 
+    def on_file(path, hashes):
+        size, *rest = hashes
+        done.append({"path": path, "size": size, "sha256": sums[path][0], "hashes": [h.hex() for h in rest]})
+        if blocks is not None:
+            blocks.flush()  # the hashes reach the file before the checkpoint that counts them
+        state.save_files(job, plen, proofs, done, name)
+
+    if done:
+        print(f"    resuming: {len(done)} of {len(files)} files already hashed")
+        on_read(sum(f["size"] for f in done))
+    finished = {f["path"]: (f["size"], *map(bytes.fromhex, f["hashes"])) for f in done}
     sources = [
         (
             f["path"].split("/"),
@@ -94,7 +110,7 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
     ]
     try:
         data, v1, _v2 = hybrid.build_from(
-            repo.split("/")[1], sources, trackers, hybrid.piece_length(total), blocks=blocks
+            repo.split("/")[1], sources, trackers, plen, blocks=blocks, done=finished, on_file=on_file
         )
     finally:
         lease.stop()

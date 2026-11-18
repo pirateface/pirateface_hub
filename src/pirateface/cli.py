@@ -170,7 +170,8 @@ def _main():
         help="build the next queued model, streamed from Hugging Face",
         description="Leases one queued model from Pirate Face, streams its files from Hugging Face through memory, "
         "builds the hybrid torrent and submits it. No model bytes are written to disk; a private checkpoint "
-        "stores lease and file metadata so an interrupted run can resume. Loops until stopped (Ctrl-C).",
+        "stores the lease and each finished file's hashes so an interrupted run resumes at the file it was "
+        "reading. Loops until stopped (Ctrl-C).",
     )
     w.add_argument("--once", action="store_true", help="take one job and exit")
     w.add_argument(
