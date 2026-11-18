@@ -17,7 +17,6 @@ RESOLVE = re.compile(r"/([\w.-]+/[\w.-]+)/resolve/([^/]+)/(.+)")
 PF_NAMESPACE = "pirateface"
 # (repo_id, path) -> the listing that file's metadata came from, so the hook checks the bytes against it.
 ANSWERED = {}
-_announced = set()
 
 
 def listing(repo_id):
@@ -85,8 +84,7 @@ def _wrap(http):
                 except api.Unreachable:
                     continue
                 if found:
-                    if find is listing and repo not in _announced:
-                        _announced.add(repo)
+                    if find is listing and ui.once(("hf did not answer", repo)):
                         ui.note(
                             "hf",
                             f"{repo}  Hugging Face did not answer: commit {found['commit'][:12]} and its files from {found['trust']}",

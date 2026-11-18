@@ -76,20 +76,25 @@ def mb(n):
     return f"{n / 1e6:.1f} MB" if n >= 1e5 else f"{n / 1e3:.1f} kB"
 
 
+def once(key):
+    """True the first time this process sees key: a line keyed by it is printed once."""
+    with _lock:
+        if key in _announced:
+            return False
+        _announced.add(key)
+        return True
+
+
 def banner(repo_id, files, size, where="Pirate Face"):
     """`where` is where the file list came from: the site, or the cached index while it is down."""
-    with _lock:
-        if repo_id in _announced:
-            return
-        _announced.add(repo_id)
+    if not once(repo_id):
+        return
     note("swarm", f"{repo_id}  {files} files, {mb(size)}" + ("" if where == "Pirate Face" else f"  · {where}"))
 
 
 def not_on_pirateface(repo_id, rescue_requested=False):
-    with _lock:
-        if repo_id in _announced:
-            return
-        _announced.add(repo_id)
+    if not once(repo_id):
+        return
     line = f"{repo_id}  isn't on Pirate Face yet, using Hugging Face"
     if rescue_requested:
         line += "  · requested a rescue (turn off: PF_NO_RESCUE=1)"

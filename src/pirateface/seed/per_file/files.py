@@ -7,6 +7,8 @@ from pathlib import Path
 
 import libtorrent as lt
 
+from pirateface.client.torrent import real_files
+
 MIN_SIZE = 1 << 20  # configs and tokenizers aren't worth a swarm each
 
 
@@ -17,9 +19,7 @@ def local_files(data, save_dir):
         return None
     fs = ti.files()
     found = []
-    for i in range(fs.num_files()):
-        if fs.file_flags(i) & fs.flag_pad_file:
-            continue  # BEP 47 padding: zeros, with no pieces root of its own
+    for i in real_files(fs):  # BEP 47 padding is zeros, with no pieces root of its own
         path, size = Path(save_dir, fs.file_path(i)), fs.file_size(i)
         if size >= MIN_SIZE and path.is_file() and path.stat().st_size == size:
             found.append((path, str(fs.root(i))))
@@ -30,7 +30,4 @@ def biggest_file(data):
     """The largest non-pad file's size in the torrent; 0 when every file is padding. Under MIN_SIZE, nothing
     in the torrent is worth a per-file swarm, however the files turn out locally."""
     fs = lt.torrent_info(data).files()
-    return max(
-        (fs.file_size(i) for i in range(fs.num_files()) if not (fs.file_flags(i) & fs.flag_pad_file)),
-        default=0,
-    )
+    return max((fs.file_size(i) for i in real_files(fs)), default=0)
