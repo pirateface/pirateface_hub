@@ -91,8 +91,25 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
         return None
-    # 409: this lane still holds a lease (one being given back, or one that lapses soon). Ask again later.
-    if status == 409 or site.transient(status):
+    if status == 409:
+        lease_id = site.held_lease_id(job)
+        try:
+            saved = state.find(lease_id) if lease_id else None
+        except OSError as error:
+            raise user.SeedError(str(error)) from error
+        if saved:
+            checkpoint, checkpoint_name, owner_alive = saved
+            if owner_alive is not False:
+                label = f"--name {checkpoint_name}" if checkpoint_name else "the unnamed worker"
+                raise WorkUnreachable(
+                    f"lease {lease_id} has a local checkpoint for {label}, but its owner may still be running; "
+                    "not starting a duplicate build"
+                )
+            print(f"Resuming saved lease for {checkpoint['job'].get('repoId', 'model')}.")
+            return _resume_once(key, trackers, checkpoint_name, checkpoint, max_bytes, max_download_rate)
+        reason = "; no matching local checkpoint was found" if lease_id else ""
+        raise WorkUnreachable(f"lease refused (409): {(job or {}).get('error', 'lease already held')}{reason}")
+    if site.transient(status):
         raise WorkUnreachable(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")

@@ -3,6 +3,7 @@ of that job already hashed (file boundaries only: a file cut off part way is rea
 
 import json
 import os
+import socket
 
 from pirateface.seed import user
 from pirateface.seed.hybrid import BLOCK
@@ -41,8 +42,43 @@ def load(name=None):
     return state
 
 
+def find(lease_id):
+    """Find a saved job by lease id, including checkpoints saved under another worker name.
+
+    The third value is True/False when this host can tell whether its owner process is alive, or None when unknown.
+    """
+    for path in STATE_FILE.parent.glob("work-lease*.json"):
+        try:
+            saved = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(saved, dict) or saved.get("leaseId") != lease_id:
+            continue
+        if not isinstance(saved.get("job"), dict):
+            raise OSError(f"saved work lease at {path} is invalid; remove it to start fresh")
+        name = None if path == STATE_FILE else path.name.removeprefix("work-lease-").removesuffix(".json")
+        pid, host = saved.get("pid"), saved.get("host")
+        if not isinstance(pid, int) or isinstance(pid, bool) or host != socket.gethostname():
+            return saved, name, None
+        if pid == os.getpid():
+            return saved, name, True
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return saved, name, False
+        except PermissionError:
+            return saved, name, True
+        except OSError:
+            return saved, name, None
+        return saved, name, True
+    return None
+
+
 def save(job, name=None):
-    _write(_path(name), {"leaseId": job["leaseId"], "job": job})
+    _write(
+        _path(name),
+        {"leaseId": job["leaseId"], "job": job, "pid": os.getpid(), "host": socket.gethostname()},
+    )
 
 
 def clear(name=None, files=True):

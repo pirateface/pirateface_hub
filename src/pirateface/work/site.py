@@ -3,9 +3,12 @@
 import base64
 import http.client
 import json
+import re
 
 from pirateface.client import api
 from pirateface.config import API
+
+LEASE_ID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
 
 
 def request(path, key, body, timeout=120):
@@ -20,6 +23,18 @@ def request(path, key, body, timeout=120):
 def transient(status):
     """A status worth asking again after a pause: no answer, a timeout, rate limiting or a server error."""
     return status == 0 or status in {408, 425, 429} or status >= 500
+
+
+def held_lease_id(answer):
+    """The lease id from a 409 answer saying this account already holds a lease."""
+    if not isinstance(answer, dict):
+        return None
+    lease_id = answer.get("leaseId")
+    if isinstance(lease_id, str) and LEASE_ID.fullmatch(lease_id):
+        return lease_id
+    error = answer.get("error")
+    match = LEASE_ID.search(error) if isinstance(error, str) else None
+    return match.group() if match else None
 
 
 def lease(key, name=None, max_bytes=None):
