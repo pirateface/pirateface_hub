@@ -50,10 +50,15 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 `pf work --max-download-rate 10` caps the Hugging Face stream at 10 MB/s; without the option, it is unlimited.
 The limit applies per process, so multiple workers can use more bandwidth in total.
 If `pf work` is interrupted, it saves the lease and file metadata privately under the Pirate Face config directory
-and resumes that job on the next run while the lease is still active. Each fully streamed file's hashes are saved
-too, so the resumed run (or a later lease of the same job at the same revision) restarts at the file that was cut off;
-model bytes are never saved to disk. The checkpoint is removed once the job is submitted or given back.
+and resumes the job and completed torrent pieces on the next run while the lease is still active. It can also reuse
+saved progress if a new lease is granted for the same model revision and files. No model bytes are saved to disk.
+Each worker lane retains at most one model's progress database; its size is not capped. Temporary proof hashes can
+use additional disk space while a job runs. Completed jobs remove their progress database. If a database belongs
+to a different model, it is preserved and the worker stops; use `--clear-progress` to discard it explicitly.
+On upgrade, old file-boundary hash checkpoints are deleted; that job's previously processed files are read again.
 Use a distinct `--name` for each concurrent worker so their checkpoints do not overwrite each other.
+Stop the worker first and pass `--clear-progress` with the same `--name` to discard its saved piece hashes.
+This does not release its lease.
 
 `pf restore` takes `.torrent` files or a client folder, such as qBittorrent's `BT_backup` or Transmission's `torrents/`.
 

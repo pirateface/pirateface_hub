@@ -5,7 +5,7 @@ import time
 
 from pirateface import ui
 from pirateface.seed import hybrid
-from pirateface.work import site, source, state
+from pirateface.work import resumable_build, site, source
 from pirateface.work.errors import LeaseLost, WorkError
 
 RENEW_SECONDS = 10  # the rescue board reads this; the site drops a lease after 10 minutes without one
@@ -65,21 +65,14 @@ class Lease:
         self._thread.join(timeout=2)
 
 
-def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
-    """Stream every file of the job, build the hybrid torrent. Returns (.torrent bytes, manifest, v1 infohash).
-    blocks: a proofs.BlockHashes to keep the block hashes in, or None. Files an earlier run of this job finished
-    are taken from the lane's checkpoint instead of Hugging Face, and each file finished now is added to it."""
+def build(job, key, trackers, name=None, blocks=None, max_download_rate=None, *, progress_store):
+    """Stream and checkpoint a job. Returns (.torrent bytes, manifest, v1 infohash)."""
     repo, revision = job["repoId"], job["revision"]
     files = sorted(job["files"], key=lambda f: hybrid.torrent_order(f["path"].split("/")))
     total = sum(f["size"] for f in files)
-    plen, proofs = hybrid.piece_length(total), blocks is not None
-    done = state.load_files(job, plen, proofs, name)
-    if blocks is not None:
-        blocks.keep([(f["path"], -(-f["size"] // hybrid.BLOCK)) for f in done])
     lease = Lease(key, job["leaseId"], total, name)
     lease.renew()  # confirm we hold the lease before streaming
     lease.start()
-    sums = {f["path"]: (f["sha256"], f["size"]) for f in done}
     progress = ui.work_progress(total)
     rate_limiter = source.RateLimiter(max_download_rate) if max_download_rate is not None else None
 
@@ -87,40 +80,20 @@ def build(job, key, trackers, name=None, blocks=None, max_download_rate=None):
         lease.note(n)
         progress.update(n)
 
+    def on_reuse(n):
+        lease.note(n)
+        ui.work_reuse(progress, n)
+
     def on_end(path, digest, size):
-        sums[path] = (digest, size)
+        pass  # resumable_build validates its own complete-file digests
 
-    def on_file(path, hashes):
-        size, *rest = hashes
-        done.append({"path": path, "size": size, "sha256": sums[path][0], "hashes": [h.hex() for h in rest]})
-        if blocks is not None:
-            blocks.flush()  # the hashes reach the file before the checkpoint that counts them
-        state.save_files(job, plen, proofs, done, name)
+    def opener(path, offset, sha):
+        return source.open_file(repo, revision, path, on_read, on_end, rate_limiter, offset, sha)
 
-    if done:
-        print(f"    resuming: {len(done)} of {len(files)} files already hashed")
-        on_read(sum(f["size"] for f in done))
-    finished = {f["path"]: (f["size"], *map(bytes.fromhex, f["hashes"])) for f in done}
-    sources = [
-        (
-            f["path"].split("/"),
-            lambda f=f: source.open_file(repo, revision, f["path"], on_read, on_end, rate_limiter),
-        )
-        for f in files
-    ]
     try:
-        data, v1, _v2 = hybrid.build_from(
-            repo.split("/")[1], sources, trackers, plen, blocks=blocks, done=finished, on_file=on_file
-        )
+        result = resumable_build.build(repo, files, trackers, progress_store, opener, blocks, on_read, on_reuse)
     finally:
         lease.stop()
         progress.close()
     lease.renew()  # the last renewal before the result is submitted
-    for f in files:
-        digest, size = sums.get(f["path"], (None, None))
-        if size != f["size"]:
-            raise WorkError(f"{f['path']} is {size} bytes from Hugging Face, not {f['size']}.")
-        if f.get("sha256") and digest != f["sha256"]:
-            raise WorkError(f"{f['path']} does not match its LFS SHA-256 at {revision[:12]}.")
-    manifest = [{"path": f["path"], "sha256": sums[f["path"]][0]} for f in files]
-    return data, manifest, v1
+    return result

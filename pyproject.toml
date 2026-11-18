@@ -16,6 +16,7 @@ classifiers = [
 dependencies = [
     "huggingface-hub>=2.0",
     "libtorrent>=2.0",
+    "resumablesha256==1.0",
     "tqdm>=4.42",
 ]
 

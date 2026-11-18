@@ -126,6 +126,16 @@ def work_progress(size):
     )
 
 
+def work_reuse(progress, size):
+    """Count saved bytes as progress without treating them as downloaded bytes."""
+    if progress.disable or not size:
+        return
+    progress.n += size
+    progress.initial += size
+    progress.last_print_n += size
+    progress.refresh()
+
+
 def set_status(bar, text):
     # Not tqdm's postfix: it always prepends ", ".
     bar.bar_format = "{desc}  {bar:20}  " + text.replace("{", "{{").replace("}", "}}")

@@ -1,11 +1,9 @@
-"""Private local checkpoints for a lane, so pf work can resume after interruption: the leased job, and the files
-of that job already hashed (file boundaries only: a file cut off part way is read again from its start)."""
+"""Private local lease checkpoints and paths for a work lane."""
 
 import json
 import os
 
 from pirateface.seed import user
-from pirateface.seed.hybrid import BLOCK
 
 STATE_FILE = user.KEY_FILE.parent / "work-lease.json"
 
@@ -45,40 +43,11 @@ def save(job, name=None):
     _write(_path(name), {"leaseId": job["leaseId"], "job": job})
 
 
-def clear(name=None, files=True):
-    """Delete the saved lease and, unless files is False, the finished files (kept when the same job may come back)."""
+def clear(name=None):
+    """Delete the saved lease without deleting piece progress."""
     _path(name).unlink(missing_ok=True)
-    if files:
-        _path(name, "files").unlink(missing_ok=True)
-        blocks_path(name).unlink(missing_ok=True)
 
 
 def blocks_path(name=None):
-    """Where the finished files' 16 KiB block hashes are kept for the block proofs, 32 bytes each, in file order."""
+    """Path of the old file-boundary block hashes, removed when a lane upgrades."""
     return _path(name, "files", ".blocks")
-
-
-def _job_key(job, plen, proofs):
-    return [job["repoId"], job["revision"], plen, proofs]
-
-
-def load_files(job, plen, proofs, name=None):
-    """The files an earlier run of this job finished, as saved by save_files(). [] when there are none, or when the
-    checkpoint is unreadable or for another repo, revision, piece length or file list: it is then thrown away."""
-    path = _path(name, "files")
-    try:
-        saved = json.loads(path.read_text())
-        sizes = {f["path"]: f["size"] for f in job["files"]}
-        done = saved["files"]
-        if saved["job"] == _job_key(job, plen, proofs) and all(sizes.get(f["path"]) == f["size"] for f in done):
-            need = 32 * sum(-(-f["size"] // BLOCK) for f in done)
-            if not proofs or blocks_path(name).stat().st_size >= need:
-                return done
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    path.unlink(missing_ok=True)
-    return []
-
-
-def save_files(job, plen, proofs, done, name=None):
-    _write(_path(name, "files"), {"job": _job_key(job, plen, proofs), "files": done})
