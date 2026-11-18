@@ -280,14 +280,15 @@ def seed_from_cache(per_file=True):
         raise SeedError(str(error)) from error
     except Exception as error:
         raise SeedError(f"qBittorrent is not reachable; configure its Web UI ({clients.HELP})") from error
-    trackers = None
+    key = trackers = None
     for candidate in candidates:
         if not user.YES and not user.ask(
             f"==> Seed {candidate.repo} ({candidate.seeders} seeds)? [y/N] "
         ).lower().startswith("y"):
             continue
-        if trackers is None:
-            trackers = api.trackers(user.load_key())
+        if trackers is None or trackers is api.TRACKERS:  # share a fetched list; after the fallback, ask again
+            key = key or user.load_key()
+            trackers = api.trackers(key)
         try:
             _seed(candidate, qbt, trackers, per_file)
         except (OSError, package.LinkError, RuntimeError) as error:
