@@ -1,6 +1,7 @@
 """Private local checkpoints for a lane, so pf work can resume after interruption: the leased job, and the files
 of that job already hashed (file boundaries only: a file cut off part way is read again from its start)."""
 
+import contextlib
 import json
 import os
 import socket
@@ -9,6 +10,10 @@ from pirateface.seed import user
 from pirateface.seed.hybrid import BLOCK
 
 STATE_FILE = user.KEY_FILE.parent / "work-lease.json"
+
+
+class CheckpointLocked(Exception):
+    """Another process currently owns this worker's checkpoint."""
 
 
 def _path(name, kind="lease", suffix=".json"):
@@ -42,6 +47,72 @@ def load(name=None):
     return state
 
 
+@contextlib.contextmanager
+def lock(name=None):
+    """Exclusively claim a worker checkpoint until this process exits the context.
+
+    Keep the lock file on disk: unlinking a locked file can let another process lock a new inode at the same path.
+    """
+    path = _path(name, "lock", ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"\0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise CheckpointLocked(f"could not acquire checkpoint lock at {path}") from error
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                raise CheckpointLocked(f"could not acquire checkpoint lock at {path}") from error
+        locked = True
+        yield
+    finally:
+        if locked:
+            with contextlib.suppress(OSError):
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def owner_alive(saved):
+    """Whether the checkpoint owner is alive on this host, or None when it cannot be determined."""
+    pid, host = saved.get("pid"), saved.get("host")
+    if not isinstance(pid, int) or isinstance(pid, bool) or host != socket.gethostname():
+        return None
+    # On Windows, os.kill(pid, 0) terminates the process rather than probing it.
+    if os.name == "nt":
+        return None
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 def find(lease_id):
     """Find a saved job by lease id, including checkpoints saved under another worker name.
 
@@ -57,20 +128,7 @@ def find(lease_id):
         if not isinstance(saved.get("job"), dict):
             raise OSError(f"saved work lease at {path} is invalid; remove it to start fresh")
         name = None if path == STATE_FILE else path.name.removeprefix("work-lease-").removesuffix(".json")
-        pid, host = saved.get("pid"), saved.get("host")
-        if not isinstance(pid, int) or isinstance(pid, bool) or host != socket.gethostname():
-            return saved, name, None
-        if pid == os.getpid():
-            return saved, name, True
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return saved, name, False
-        except PermissionError:
-            return saved, name, True
-        except OSError:
-            return saved, name, None
-        return saved, name, True
+        return saved, name, owner_alive(saved)
     return None
 
 

@@ -1,5 +1,6 @@
 """pf work: the loop. Takes a job, builds it, submits it; --once takes one job and exits."""
 
+import contextlib
 import sys
 import time
 
@@ -105,8 +106,26 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
                     f"lease {lease_id} has a local checkpoint for {label}, but its owner may still be running; "
                     "not starting a duplicate build"
                 )
-            print(f"Resuming saved lease for {checkpoint['job'].get('repoId', 'model')}.")
-            return _resume_once(key, trackers, checkpoint_name, checkpoint, max_bytes, max_download_rate)
+            lock_context = contextlib.nullcontext() if checkpoint_name == name else state.lock(checkpoint_name)
+            try:
+                with lock_context:
+                    current = checkpoint if checkpoint_name == name else state.load(checkpoint_name)
+                    if not current or current.get("leaseId") != lease_id:
+                        raise WorkUnreachable(
+                            f"saved checkpoint for lease {lease_id} changed before it could be resumed"
+                        )
+                    if state.owner_alive(current) is not False:
+                        raise WorkUnreachable(
+                            f"lease {lease_id} checkpoint owner may still be active; not starting a duplicate build"
+                        )
+                    print(f"Resuming saved lease for {current['job'].get('repoId', 'model')}.")
+                    resumed = _resume_once(key, trackers, checkpoint_name, current, max_bytes, max_download_rate)
+            except state.CheckpointLocked as error:
+                raise WorkUnreachable(f"lease {lease_id} checkpoint is already locked by another worker") from error
+            if resumed is None:
+                # The saved lease expired between the 409 and renew. Retry the queue now; only sleep if it is empty.
+                return _work_once(key, trackers, name, max_bytes, max_download_rate)
+            return resumed
         reason = "; no matching local checkpoint was found" if lease_id else ""
         raise WorkUnreachable(f"lease refused (409): {(job or {}).get('error', 'lease already held')}{reason}")
     if site.transient(status):
@@ -147,9 +166,23 @@ def run(args):
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
     max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000
     try:
+        with state.lock(args.name):
+            return _run_locked(args, key, trackers, max_bytes, max_download_rate)
+    except state.CheckpointLocked:
+        label = args.name or "default"
+        sys.exit(f"error: worker {label} already has an active checkpoint lock; stop it or choose another --name")
+
+
+def _run_locked(args, key, trackers, max_bytes, max_download_rate):
+    try:
         pending = state.load(args.name)
     except OSError as e:
         sys.exit(f"error: {e}")
+    if pending and state.owner_alive(pending) is not False:
+        label = args.name or "default"
+        sys.exit(
+            f"error: worker {label} has a saved lease owned by a running or unknown process; refusing a duplicate build"
+        )
     backoff = WORK_BACKOFF_MIN
     while True:
         try:
