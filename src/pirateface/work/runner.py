@@ -35,8 +35,8 @@ def _job_size(job, max_bytes):
     total = sum(sizes)
     if max_bytes and total > max_bytes:
         # The site can lease a job past the cap it was asked for (4,970 GB for a 20 GiB cap, seen live), so the
-        # client refuses it rather than streaming gigabytes nobody asked for. There is no way to hand a lease
-        # back -- it lapses on its own -- so this costs the wait, not the data.
+        # client refuses it rather than streaming gigabytes nobody asked for. The lease is kept to lapse on its
+        # own: given back, the same row would be offered again at once. This costs the wait, not the data.
         raise Oversize(
             f"{job['repoId']} is {total / 1e9:.2f} GB, over the {max_bytes / 1024**3:.0f} GiB cap this run "
             f"asked for: not downloaded. Raise --max-size, or leave it off, to take jobs this size"
@@ -55,8 +55,7 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
         ]
     )
     state.save(job, name)
-    # A failed build raises. The lease remains active until it lapses; the server decides whether
-    # another job can be leased before then.
+    # A failed build raises after giving the lease back, so the next lease call takes a job at once.
     try:
         with proofs.sidecar() as blocks:
             data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate)
@@ -67,9 +66,10 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
         raise
     except (WorkError, user.SeedError):
         state.clear(name)
+        site.release(key, job["leaseId"])  # best effort: unanswered, the lease lapses on its own
         raise
     status, answer = site.complete(key, job["leaseId"], data, manifest, block_proofs)
-    if status == 0 or status in {408, 425, 429} or status >= 500:
+    if site.transient(status):
         raise WorkUnreachable(
             f"could not submit the torrent: {(answer or {}).get('error', 'the site could not be reached')}"
         )
@@ -91,8 +91,9 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
         return None
-    if status == 0:  # the site could not be reached: network error, not a refusal
-        raise WorkUnreachable(job["error"])
+    # 409: this lane still holds a lease (one being given back, or one that lapses soon). Ask again later.
+    if status == 409 or site.transient(status):
+        raise WorkUnreachable(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     return _process_job(job, key, trackers, name, max_bytes, max_download_rate)
@@ -110,7 +111,7 @@ def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=N
         state.clear(name)
         print("Saved lease expired; taking a new job.", file=sys.stderr)
         return None
-    if status == 0 or status in {408, 425, 429} or status >= 500:
+    if site.transient(status):
         raise WorkUnreachable((answer or {}).get("error", f"lease renewal failed ({status})"))
     if status != 200:
         raise user.SeedError(f"could not resume lease ({status}): {(answer or {}).get('error', 'request failed')}")
@@ -150,8 +151,8 @@ def run(args):
                 sys.exit(f"error: {state_error}")
             if args.once:
                 sys.exit(f"error: {e}")
-            # Neither is a failed job: the site is down, or it offered a row this run won't take. Pause and
-            # ask again, doubling up to the cap.
+            # None is a failed job: the site is down or busy, this lane still holds a lease, or the site offered
+            # a row this run won't take. Pause and ask again, doubling up to the cap.
             print(f"error: {e}. Checking again in {backoff} s.", file=sys.stderr)
             time.sleep(backoff)
             backoff = min(backoff * 2, WORK_BACKOFF_MAX)
@@ -160,7 +161,7 @@ def run(args):
             pending = None
             if args.once:
                 sys.exit(f"error: {e}")
-            # Ask for another job; the site may refuse while the failed lease is still active.
+            # Ask for another job: the failed lease was given back.
             print(f"error: {e}. Taking the next job.", file=sys.stderr)
             continue
         except user.SeedError as e:

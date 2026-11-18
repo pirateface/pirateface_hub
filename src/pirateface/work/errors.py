@@ -8,4 +8,4 @@ class WorkUnreachable(WorkError):
 
 class Oversize(WorkError):
     """The site leased a job bigger than --max-size asked for. Skipped, with a pause: the same row may be
-    offered again, and there is no way to hand a lease back, so retrying it at once only spins."""
+    offered again, so retrying it at once only spins."""
