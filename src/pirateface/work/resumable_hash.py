@@ -6,7 +6,10 @@ stores only the chaining words and processed length, never the C data buffer.
 
 import struct
 
-import resumablesha256
+try:
+    import resumablesha256
+except ImportError:
+    resumablesha256 = None
 
 _CONTEXT = struct.Struct("@64sI4xQ8I")
 _WORDS = struct.Struct(">Q8I")
@@ -15,6 +18,8 @@ _INITIAL = (0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B0568
 
 class ResumableSHA256:
     def __init__(self):
+        if resumablesha256 is None:
+            raise RuntimeError("resumable SHA-256 is not installed")
         self._hash = resumablesha256.sha256()
         state = self._hash.__getstate__()
         if len(state) != _CONTEXT.size:

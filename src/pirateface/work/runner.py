@@ -1,16 +1,14 @@
 """pf work: the loop. Takes a job, builds it, submits it; --once takes one job and exits."""
 
-import sqlite3
 import sys
 import time
-from contextlib import ExitStack
 
 from pirateface import ui
 from pirateface.client import api
-from pirateface.config import API, MAX_UPLOAD_BYTES
-from pirateface.seed import proofs, user
-from pirateface.work import build, progress_store, site, state
-from pirateface.work.errors import Oversize, WorkError, WorkUnreachable
+from pirateface.config import API, MAX_UPLOAD_BYTES, flag
+from pirateface.seed import hybrid, proofs, user
+from pirateface.work import build, site, state
+from pirateface.work.errors import LeaseLost, Oversize, WorkError, WorkUnreachable
 
 WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
 WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-minute pause is safe
@@ -20,7 +18,8 @@ def _consent():
     print(f"""
 ==> pf work: you build the torrent for one queued model at a time. Its files are streamed from
     Hugging Face through memory; no model bytes are written to disk. Their hashes and progress are saved
-    in a private checkpoint so an interrupted run can resume. Checkpoints have no size limit.
+    in a private checkpoint so an interrupted run can resume. If resumable hashing is unavailable, progress
+    is saved at file boundaries instead of piece boundaries. Checkpoints have no size limit.
     Block proofs may also use a temporary file. The torrent is listed on Pirate Face under your
     account. Verified work earns points: see {API}/how-it-works.
     Terms: {API}/terms#model-torrent-submissions""")
@@ -57,37 +56,24 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
         ]
     )
     state.save(job, name)
-    checkpoint_path = state._path(name).with_suffix(".progress.sqlite")
+    old_piece_checkpoint = state._path(name).with_suffix(".progress.sqlite")
+    if old_piece_checkpoint.exists():
+        print(f"    Older SQLite progress is not used by this version and was kept at {old_piece_checkpoint}.")
     try:
-        with ExitStack() as stack:
-            progress = stack.enter_context(
-                progress_store.ProgressStore(checkpoint_path, progress_store.job_identity(job))
-            )
-            legacy_files = state._path(name, "files")
-            legacy_blocks = state.blocks_path(name)
-            if legacy_files.exists() or legacy_blocks.exists():
-                legacy_files.unlink(missing_ok=True)
-                legacy_blocks.unlink(missing_ok=True)
-                print("    Removed the old file-boundary checkpoint; piece-level checkpoints are now used.")
-            blocks = stack.enter_context(proofs.sidecar())
-            data, manifest, infohash = build.build(
-                job, key, trackers, name, blocks, max_download_rate, progress_store=progress
-            )
+        plen = hybrid.piece_length(total)
+        saved = state.load_progress(job, plen, not flag("PF_NO_BLOCK_PROOFS"), name)
+        with proofs.sidecar(state.blocks_path(name)) as blocks:
+            data, manifest, infohash = build.build(job, key, trackers, name, blocks, max_download_rate, saved=saved)
             if len(data) > MAX_UPLOAD_BYTES:
                 raise user.SeedError("the .torrent is over the 3 MB upload limit")
             block_proofs = proofs.answer(key, data, blocks)
     except WorkUnreachable:
         raise
-    except progress_store.DifferentJob as e:
-        raise user.SeedError(
-            f"saved piece checkpoint is for another model: {checkpoint_path}; "
-            "the lease was kept. Use --clear-progress to discard the old checkpoint before retrying"
-        ) from e
-    except (WorkError, user.SeedError):
-        state.clear(name)
+    except (WorkError, user.SeedError) as e:
+        state.clear(name, files=not isinstance(e, LeaseLost))
         site.release(key, job["leaseId"])  # best effort: unanswered, the lease lapses on its own
         raise
-    except (OSError, sqlite3.Error, ValueError, RuntimeError) as e:
+    except (OSError, ValueError, RuntimeError) as e:
         raise user.SeedError(f"could not use progress checkpoint: {e}. Saved lease and progress were kept") from e
     status, answer = site.complete(key, job["leaseId"], data, manifest, block_proofs)
     if site.transient(status):
@@ -95,15 +81,14 @@ def _process_job(job, key, trackers, name, max_bytes=None, max_download_rate=Non
             f"could not submit the torrent: {(answer or {}).get('error', 'the site could not be reached')}"
         )
     if status == 200:
-        state.clear(name)
-        checkpoint_path.unlink(missing_ok=True)
+        state.clear(name, files=True)
         # already_listed: the same files are listed under another infohash, which the site returns.
         if (answer or {}).get("status") == "already_listed":
             print(f"    Already listed: {API}/{job['repoId']} ({answer.get('infohash', '')})")
         else:
             ui.aligned([("listed", f"{API}/{job['repoId']}"), ("infohash", infohash)])
         return True
-    state.clear(name)
+    state.clear(name, files=True)
     print(f"    Not listed ({status}): {(answer or {}).get('error', 'request failed')}")
     return False
 
@@ -153,9 +138,10 @@ def run(args):
         try:
             checkpoint_path.unlink(missing_ok=True)
             checkpoint_path.with_name(checkpoint_path.name + "-journal").unlink(missing_ok=True)
+            state.clear_files(args.name)
         except OSError as e:
             sys.exit(f"error: could not remove progress checkpoint {checkpoint_path}: {e}")
-        print("Discarded saved piece hashes for this worker; the saved lease was not changed.")
+        print("Discarded saved progress hashes for this worker; the saved lease was not changed.")
     trackers = api.trackers(key)
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
     max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000

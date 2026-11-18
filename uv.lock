@@ -185,8 +185,13 @@ source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
     { name = "libtorrent" },
-    { name = "resumablesha256" },
+    { name = "resumablesha256", marker = "(implementation_name == 'cpython' and platform_machine == 'arm64' and sys_platform == 'darwin') or (implementation_name == 'cpython' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (implementation_name == 'cpython' and platform_machine == 'x86_64' and sys_platform == 'linux') or (implementation_name == 'cpython' and platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+piece-resume = [
+    { name = "resumablesha256" },
 ]
 
 [package.dev-dependencies]
@@ -199,9 +204,11 @@ dev = [
 requires-dist = [
     { name = "huggingface-hub", specifier = ">=2.0" },
     { name = "libtorrent", specifier = ">=2.0" },
-    { name = "resumablesha256", specifier = "==1.0" },
+    { name = "resumablesha256", marker = "(implementation_name == 'cpython' and platform_machine == 'arm64' and sys_platform == 'darwin') or (implementation_name == 'cpython' and platform_machine == 'x86_64' and sys_platform == 'darwin') or (implementation_name == 'cpython' and platform_machine == 'x86_64' and sys_platform == 'linux') or (implementation_name == 'cpython' and platform_machine == 'AMD64' and sys_platform == 'win32')", specifier = "==1.0" },
+    { name = "resumablesha256", marker = "extra == 'piece-resume'", specifier = "==1.0" },
     { name = "tqdm", specifier = ">=4.42" },
 ]
+provides-extras = ["piece-resume"]
 
 [package.metadata.requires-dev]
 dev = [

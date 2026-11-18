@@ -176,7 +176,7 @@ def _main():
     w.add_argument(
         "--clear-progress",
         action="store_true",
-        help="discard this worker's saved piece hashes; the lease is kept",
+        help="discard this worker's saved piece and file hashes; the lease is kept",
     )
     w.add_argument(
         "--name",
