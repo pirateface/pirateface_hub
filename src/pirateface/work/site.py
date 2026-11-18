@@ -12,7 +12,7 @@ def request(path, key, body, timeout=120):
     """(HTTP status, JSON answer or None). Errors come back as statuses, not exceptions: 0 when the
     site could not be reached at all."""
     try:
-        return api.post(key, path, json.dumps(body).encode(), timeout)
+        return api.post(key, path, json.dumps(body).encode(), timeout, parse=lambda b: json.loads(b) if b else None)
     except (OSError, http.client.HTTPException) as e:  # DNS, refused, reset, timeout, truncated answer
         return 0, {"error": f"could not reach {API} ({e})"}
 

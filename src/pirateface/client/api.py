@@ -253,14 +253,14 @@ def older(a, b):
     return _release(a) < _release(b)
 
 
-def post(key, path, data, timeout, content_type="application/json"):
-    """POST data to the site as this account. Returns (HTTP status, JSON answer, or None for an empty body); an
-    error status comes back with the site's JSON or {"error": reason}. No answer at all raises."""
+def post(key, path, data, timeout, content_type="application/json", parse=json.loads):
+    """POST data to the site as this account. Returns (HTTP status, parse(body)); an error status comes back with
+    the site's JSON or {"error": reason}. No answer at all raises, and so does a body parse() rejects (an empty
+    one, by default)."""
     headers = {"Authorization": f"Bearer {key}", "Content-Type": content_type}
     try:
         with request(f"{API}{path}", timeout, method="POST", headers=headers, data=data) as r:
-            body = r.read()
-            return r.status, json.loads(body) if body else None
+            return r.status, parse(r.read())
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.load(e)
