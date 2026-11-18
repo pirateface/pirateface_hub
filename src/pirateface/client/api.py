@@ -253,12 +253,14 @@ def older(a, b):
     return _release(a) < _release(b)
 
 
-def _post(key, path, data, content_type, timeout):
-    """POST data to the site as this account. Returns (HTTP status, JSON answer)."""
+def post(key, path, data, timeout, content_type="application/json", parse=json.loads):
+    """POST data to the site as this account. Returns (HTTP status, parse(body)); an error status comes back with
+    the site's JSON or {"error": reason}. No answer at all raises, and so does a body parse() rejects (an empty
+    one, by default)."""
     headers = {"Authorization": f"Bearer {key}", "Content-Type": content_type}
     try:
         with request(f"{API}{path}", timeout, method="POST", headers=headers, data=data) as r:
-            return r.status, json.load(r)
+            return r.status, parse(r.read())
     except urllib.error.HTTPError as e:
         try:
             return e.code, json.load(e)
@@ -268,7 +270,7 @@ def _post(key, path, data, content_type, timeout):
 
 def submit(key, body, path="/api/community-torrents"):
     """POST a community torrent. Returns (HTTP status, JSON answer)."""
-    return _post(key, path, json.dumps(body).encode(), "application/json", 120)
+    return post(key, path, json.dumps(body).encode(), 120)
 
 
 def upgrade(key, body):
@@ -290,7 +292,7 @@ def my_torrents(key):
 
 def restore(key, data):
     """POST raw .torrent bytes to /api/torrents/restore. Returns (HTTP status, JSON answer)."""
-    return _post(key, "/api/torrents/restore", data, "application/x-bittorrent", 60)
+    return post(key, "/api/torrents/restore", data, 60, "application/x-bittorrent")
 
 
 _rescues = []

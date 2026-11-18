@@ -390,7 +390,8 @@ def swarm_files(repo_id, magnet=None, where=None):
         if h is None:
             raise Unavailable()
         ti = h.torrent_file()
-        return [(_relative(ti, i), ti.files().file_size(i)) for i in real_files(ti.files())]
+        fs = ti.files()
+        return [(_relative(ti, i), fs.file_size(i)) for i in real_files(fs)]
 
 
 def fetch_file(repo_id, filename, stall_timeout=config.STALL_TIMEOUT, magnet=None):
