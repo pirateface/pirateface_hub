@@ -108,6 +108,19 @@ def repo_progress(repo_id):
     )
 
 
+def work_progress(size):
+    """Byte progress for a streamed work job, shown in an interactive terminal."""
+    return tqdm(
+        total=size,
+        unit="B",
+        unit_scale=True,
+        unit_divisor=1000,
+        file=sys.stderr,
+        dynamic_ncols=True,
+        disable=QUIET or not sys.stderr.isatty(),
+    )
+
+
 def set_status(bar, text):
     # Not tqdm's postfix: it always prepends ", ".
     bar.bar_format = "{desc}  {bar:20}  " + text.replace("{", "{{").replace("}", "}}")
