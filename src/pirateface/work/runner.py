@@ -143,9 +143,10 @@ def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=N
         state.clear(name, files=False)
         raise
     status, answer = site.renew(key, saved["leaseId"])
-    if status == 410:
-        state.clear(name, files=False)  # the job may be leased again: keep its finished files
-        print("Saved lease expired; taking a new job.", file=sys.stderr)
+    if status in {401, 403, 404, 410}:
+        state.clear(name, files=False)  # keep finished-file and piece checkpoints for a later lease
+        reason = "expired" if status == 410 else f"could not be renewed ({status})"
+        print(f"Saved lease checkpoint {state.lease_path(name)} {reason}; taking a new job.", file=sys.stderr)
         return None
     if site.transient(status):
         raise WorkUnreachable((answer or {}).get("error", f"lease renewal failed ({status})"))

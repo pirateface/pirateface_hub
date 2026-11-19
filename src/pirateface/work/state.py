@@ -20,6 +20,11 @@ def _path(name, kind="lease", suffix=".json"):
     return STATE_FILE.with_name(f"work-{kind}{'' if name is None else '-' + name}{suffix}")
 
 
+def lease_path(name=None):
+    """Path to this worker's saved lease checkpoint, for user-facing recovery messages."""
+    return _path(name)
+
+
 def _write(path, data):
     """Write JSON to path atomically (temp file + rename), readable by this user only."""
     path.parent.mkdir(parents=True, exist_ok=True)
