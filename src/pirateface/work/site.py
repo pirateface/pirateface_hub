@@ -26,15 +26,11 @@ def transient(status):
 
 
 def held_lease_id(answer):
-    """The lease id from a 409 answer saying this account already holds a lease."""
+    """The lease id from a structured 409 answer, if present and valid."""
     if not isinstance(answer, dict):
         return None
     lease_id = answer.get("leaseId")
-    if isinstance(lease_id, str) and LEASE_ID.fullmatch(lease_id):
-        return lease_id
-    error = answer.get("error")
-    match = LEASE_ID.search(error) if isinstance(error, str) else None
-    return match.group() if match else None
+    return lease_id if isinstance(lease_id, str) and LEASE_ID.fullmatch(lease_id) else None
 
 
 def lease(key, name=None, max_bytes=None):
