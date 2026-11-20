@@ -7,8 +7,8 @@ class WorkUnreachable(WorkError):
 
 
 class LeaseLost(WorkError):
-    """The lease lapsed or was taken away mid-job. The job goes back to the queue and may come back to this lane,
-    so its finished files are kept."""
+    """The build lost its lease: it lapsed, was taken away, or could not be renewed in time. The job goes
+    back to the queue and may come back to this lane, so its finished files are kept."""
 
 
 class Oversize(WorkError):

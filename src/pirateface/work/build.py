@@ -28,27 +28,30 @@ class Lease:
     def _renew_loop(self):
         while not self._stop.wait(RENEW_SECONDS):
             try:
-                self.renew()
+                self.renew(strict=False)
             except WorkError as e:
                 self._error = e
                 return
 
-    def renew(self):
-        """Renew the lease now: the thread on its timer, build once at each end of the job. A network
-        error (status 0) is only fatal once the site has been unreachable for RENEW_UNREACHABLE_SECONDS;
-        any real non-200 answer means the lease is gone."""
+    def renew(self, strict=True):
+        """Renew the lease now: the thread on its timer, build once at each end of the job. An unanswered
+        renewal (status 0) rides out RENEW_UNREACHABLE_SECONDS on either path, as it always has. Any other
+        answer that is not 200 ends a direct call at once, so nothing streams or submits on a lease the
+        site never confirmed; the timer, which asks non-strictly, also rides anything site.transient counts."""
         status, body = site.renew(self.key, self.id, self.done, self.total, self.name)
         if status == 200:
             self._down_since = None
             return
-        if status == 0:
+        # status 0 first, for both paths: a network error is not a lost lease and never was. `not strict`
+        # then adds the answers only the timer may tolerate, so a direct call keeps its old contract.
+        if status == 0 or (not strict and site.transient(status)):
             if self._down_since is None:
                 self._down_since = time.monotonic()
             if time.monotonic() - self._down_since > RENEW_UNREACHABLE_SECONDS:
-                raise LeaseLost(
-                    f"the site has been unreachable for {RENEW_UNREACHABLE_SECONDS // 60} minutes; "
-                    "the lease has lapsed and the request is back in the queue"
-                )
+                minutes = RENEW_UNREACHABLE_SECONDS // 60
+                if status == 0:
+                    raise LeaseLost(f"the site has been unreachable for {minutes} minutes")
+                raise LeaseLost(f"the lease could not be renewed for {minutes} minutes (last answer: {status})")
             return  # within the grace window: keep renewing on the timer
         raise LeaseLost(f"lease lost ({status}): {(body or {}).get('error', 'request failed')}")
 
