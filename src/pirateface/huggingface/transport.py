@@ -19,11 +19,22 @@ PF_NAMESPACE = "pirateface"
 ANSWERED = {}
 
 
+def report_unreadable(repo_id, next_step):
+    """The site answered and its answer could not be read. Say so once per repo, naming what answers instead,
+    because each caller falls back somewhere different."""
+    if ui.once(("listing unreadable", repo_id)):
+        ui.note("hf", f"{repo_id}  Pirate Face's listing could not be read; {next_step}")
+
+
 def listing(repo_id):
-    """The site's listing for the repo, or the cached index's while the site is down; None if neither has it."""
+    """The site's listing for the repo, or the cached index's while the site is down or its answer cannot be
+    read; None if neither has it."""
     try:
         return api.listed(repo_id)
     except api.Unreachable:
+        return mirror.listing(repo_id)
+    except api.Unreadable:
+        report_unreadable(repo_id, "trying the cached index")
         return mirror.listing(repo_id)
 
 
@@ -82,6 +93,10 @@ def _wrap(http):
                 try:
                     found = find(repo)
                 except api.Unreachable:
+                    continue
+                except api.Unreadable:
+                    # The site answered and we could not read it: say so once, then ask Hugging Face.
+                    report_unreadable(repo, "asking Hugging Face")
                     continue
                 if found:
                     if find is listing and ui.once(("hf did not answer", repo)):

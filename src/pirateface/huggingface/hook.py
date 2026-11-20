@@ -95,6 +95,11 @@ def _from_torrent(filename, etag, dest):
     answered = transport.ANSWERED.get((repo_id, filename))
     try:
         pf_only = api.pf_only(repo_id) is not None or answered is not None
+    except api.Unreadable:
+        # The site answered and we could not read it. Say so once per repo, then try the cached index
+        # and, failing that, let Hugging Face serve the file.
+        transport.report_unreadable(repo_id, "trying the cached index")
+        return _from_index(repo_id, filename, dest, etag, answered)
     except api.Unreachable:
         # The site is down. The cached index may still name this repo's swarm, so try that before
         # handing the file to Hugging Face.
