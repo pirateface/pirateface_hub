@@ -81,6 +81,7 @@ reason is printed.
 ```sh
 pf index          # the build this copy holds, how many models, and whether the site has a newer one
 pf index --sync   # mirror the build the site names, replacing copies the build has changed
+pf index --add    # add every magnet in the index to qBittorrent, your seeding tracker on each new one
 ```
 
 ## Settings

@@ -226,6 +226,15 @@ def count():
     return len(_parsed()[0])
 
 
+def magnets():
+    """(magnet, infohash) for every repo the cached index lists, in build order with removals applied.
+
+    The same walk the lookup uses: each build's shard in date order, then that build's removals -- so a
+    model dropped and re-added later still comes back, and a removal deletes only what was known at its
+    date. `pf index --add` adds these to a torrent client."""
+    return [(entry.magnet, entry.infohash) for entry in _parsed()[0].values()]
+
+
 def resolve(repo_id):
     """The cached index's Entry for the repo, or None when this copy of the index does not list it."""
     return _parsed()[0].get(repo_id)
