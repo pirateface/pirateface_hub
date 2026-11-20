@@ -22,7 +22,7 @@ def plan_cache():
     if not cache.is_dir():
         raise user.SeedError(f"no Hugging Face cache at {cache} (set HF_HUB_CACHE)")
     print(f"==> Checking models in {cache}")
-    licenses = api.licenses()
+    licenses = hub.licenses_or_fail()
     ids = [lic["id"] for lic in licenses["licenses"]]
     for snap in sorted(cache.glob("models--*/snapshots/*")):
         repo = snap.parent.parent.name.removeprefix("models--").replace("--", "/", 1)

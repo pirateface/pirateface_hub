@@ -267,10 +267,7 @@ def submit_new(
         torrent_path = out / f"{name}.torrent"
         torrent_path.write_bytes(data)
 
-        try:
-            licenses = api.licenses()
-        except OSError as e:
-            raise SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
+        licenses = hub.licenses_or_fail()
         match = None
         if direct:
             # Direct listing: not on Hugging Face. The revision is the torrent's v1 infohash.
