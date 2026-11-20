@@ -21,8 +21,9 @@ def request(path, key, body, timeout=120):
 
 
 def transient(status):
-    """A status worth asking again after a pause: no answer, a timeout, rate limiting or a server error."""
-    return status == 0 or status in {408, 425, 429} or status >= 500
+    """A status worth asking again after a pause: no answer, a timeout, rate limiting, a 3xx this client
+    cannot turn into an answer, or a server error."""
+    return status == 0 or status in {408, 425, 429} or 300 <= status < 400 or status >= 500
 
 
 def held_lease_id(answer):
