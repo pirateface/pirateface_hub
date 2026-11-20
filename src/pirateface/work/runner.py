@@ -91,8 +91,22 @@ def _work_once(key, trackers, name, max_bytes=None, max_download_rate=None):
     status, job = site.lease(key, name, max_bytes)
     if status == 204:
         return None
-    # 409: this lane still holds a lease (one being given back, or one that lapses soon). Ask again later.
-    if status == 409 or site.transient(status):
+    if status == 409:
+        lease_id = site.held_lease_id(job)
+        try:
+            checkpoint = state.load(name) if lease_id else None
+        except OSError as error:
+            raise user.SeedError(str(error)) from error
+        if checkpoint and checkpoint.get("leaseId") == lease_id:
+            print(f"Resuming saved lease for {checkpoint['job'].get('repoId', 'model')}.")
+            resumed = _resume_once(key, trackers, name, checkpoint, max_bytes, max_download_rate)
+            if resumed is None:
+                # The saved lease expired between the 409 and renew. Retry the queue now; only sleep if it is empty.
+                return _work_once(key, trackers, name, max_bytes, max_download_rate)
+            return resumed
+        reason = "; no matching local checkpoint was found" if lease_id else ""
+        raise WorkUnreachable(f"lease refused (409): {(job or {}).get('error', 'lease already held')}{reason}")
+    if site.transient(status):
         raise WorkUnreachable(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
     if status != 200:
         raise user.SeedError(f"lease refused ({status}): {(job or {}).get('error', 'request failed')}")
@@ -107,9 +121,10 @@ def _resume_once(key, trackers, name, saved, max_bytes=None, max_download_rate=N
         state.clear(name, files=False)
         raise
     status, answer = site.renew(key, saved["leaseId"])
-    if status == 410:
-        state.clear(name, files=False)  # the job may be leased again: keep its finished files
-        print("Saved lease expired; taking a new job.", file=sys.stderr)
+    if status in {401, 403, 404, 410}:
+        state.clear(name, files=False)  # keep finished-file and piece checkpoints for a later lease
+        reason = "expired" if status == 410 else f"could not be renewed ({status})"
+        print(f"Saved lease checkpoint {state.lease_path(name)} {reason}; taking a new job.", file=sys.stderr)
         return None
     if site.transient(status):
         raise WorkUnreachable((answer or {}).get("error", f"lease renewal failed ({status})"))
@@ -130,9 +145,32 @@ def run(args):
     max_bytes = None if args.max_size is None else args.max_size * 1024**3
     max_download_rate = None if args.max_download_rate is None else args.max_download_rate * 1_000_000
     try:
+        with state.lock(args.name):
+            return _run_locked(args, key, trackers, max_bytes, max_download_rate)
+    except state.CheckpointLocked:
+        label = args.name or "default"
+        sys.exit(f"error: worker {label} already has an active checkpoint lock; stop it or choose another --name")
+
+
+def _run_locked(args, key, trackers, max_bytes, max_download_rate):
+    try:
         pending = state.load(args.name)
     except OSError as e:
         sys.exit(f"error: {e}")
+    owner_alive = state.owner_alive(pending) if pending else False
+    if pending and owner_alive is not False:
+        label = args.name or "default"
+        lease_file = state.lease_path(args.name)
+        if owner_alive is None:
+            sys.exit(
+                f"error: worker {label} has a saved lease at {lease_file}, but its owner is unknown; refusing a duplicate build. "
+                "After confirming no pf work process is using it, delete this lease file and rerun pf work. "
+                "The finished-file hashes are kept separately."
+            )
+        sys.exit(
+            f"error: worker {label} has a saved lease at {lease_file} owned by a running process; "
+            "stop that worker before starting another build"
+        )
     backoff = WORK_BACKOFF_MIN
     while True:
         try:
