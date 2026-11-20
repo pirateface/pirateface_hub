@@ -35,7 +35,6 @@ More `pf seed` options:
 pf seed --hf-cache          # every complete model in your Hugging Face cache, asking per model
 pf seed --from-cache        # seed listed torrents matching Hugging Face/Ollama cache files
 pf seed --update-trackers   # add your seeding tracker to torrents you already seed
-pf index --add              # add every magnet in the index to qBittorrent, your seeding tracker on each
 pf seed --update-per-file   # add per-file swarms for models you already seed in qBittorrent, then say which can't
 pf seed --no-per-file org/model  # skip per-file swarms
 pf seed --upgrade org/model # relist your v1-only torrent as hybrid (v1 + v2) so its files get per-file swarms
@@ -82,6 +81,7 @@ reason is printed.
 ```sh
 pf index          # the build this copy holds, how many models, and whether the site has a newer one
 pf index --sync   # mirror the build the site names, replacing copies the build has changed
+pf index --add    # add every magnet in the index to qBittorrent, your seeding tracker on each new one
 ```
 
 ## Settings

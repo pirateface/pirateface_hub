@@ -208,14 +208,14 @@ def _main():
         description="The index is what lets a download start while Pirate Face is down. Mirroring fetches the "
         "index torrent's shards into the cache, and replaces any cached copy the build names differently "
         "-- by size, or by a different sha256 for the same size where a digest has been recorded. Adding "
-        "puts every magnet the index holds into qBittorrent with your seeding tracker on each.",
+        "puts every magnet the index holds into qBittorrent with your seeding tracker on each new one.",
     )
     modes = i.add_mutually_exclusive_group()
     modes.add_argument("--sync", action="store_true", help="mirror the index torrent's shards into the cache now")
     modes.add_argument(
         "--add",
         action="store_true",
-        help="add every magnet in the index to qBittorrent, with your seeding tracker on each (qBittorrent required)",
+        help="add every magnet in the index to qBittorrent, your seeding tracker on each new one (qBittorrent required)",
     )
     i.add_argument(
         "-y",
