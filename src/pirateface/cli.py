@@ -87,7 +87,7 @@ def _main():
             "  pf seed --upgrade org/model  v1 only becomes hybrid v1+v2\n"
             "  pf work --once               one queued model, from Hugging Face\n"
             "  pf restore PATH              put a .torrent back on a listing\n"
-            "  pf index [--sync]            show the cached index, or mirror a newer build"
+            "  pf index [--sync|--add]      show the cached index, mirror it, or add it to qBittorrent"
         ),
     )
     from pirateface.client.api import VERSION
@@ -204,17 +204,38 @@ def _main():
     r.add_argument("-y", "--yes", action="store_true", help="skip prompts")
     i = sub.add_parser(
         "index",
-        help="the cached magnet index: show the build it holds, or mirror a newer one",
+        help="the cached magnet index: show the build it holds, mirror one, or add it to qBittorrent",
         description="The index is what lets a download start while Pirate Face is down. Mirroring fetches the "
         "index torrent's shards into the cache, and replaces any cached copy the build names differently "
-        "-- by size, or by a different sha256 for the same size where a digest has been recorded.",
+        "-- by size, or by a different sha256 for the same size where a digest has been recorded. Adding "
+        "puts every magnet the index holds into qBittorrent with your seeding tracker on each.",
     )
-    i.add_argument("--sync", action="store_true", help="mirror the index torrent's shards into the cache now")
+    modes = i.add_mutually_exclusive_group()
+    modes.add_argument("--sync", action="store_true", help="mirror the index torrent's shards into the cache now")
+    modes.add_argument(
+        "--add",
+        action="store_true",
+        help="add every magnet in the index to qBittorrent, with your seeding tracker on each (qBittorrent required)",
+    )
+    i.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="skip the prompt (every model downloads in full, needing a lot of disk)",
+    )
     args = p.parse_args()
 
     if args.cmd == "index":
         from pirateface.index import mirror
 
+        if args.add:
+            from pirateface.index import add
+            from pirateface.seed.user import SeedError
+
+            try:
+                return add.run(args.yes)
+            except SeedError as e:
+                sys.exit(f"error: {e}")
         return _index(mirror, args.sync)
 
     if args.cmd == "work":

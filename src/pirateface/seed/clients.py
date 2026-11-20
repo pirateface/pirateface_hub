@@ -162,6 +162,31 @@ class QBittorrent:
     def has(self, infohash):
         return self.find(infohash) is not None
 
+    def all_infohashes(self):
+        """Every infohash the client holds, casefolded (v1 and v2, and each torrent's display hash).
+
+        One torrents/info call for the whole client, so `pf index --add` can skip what is already there
+        without an HTTP round-trip per magnet."""
+        found = set()
+        for t in self.torrents():
+            for key in ("hash", "infohash_v1", "infohash_v2"):
+                if value := str(t.get(key, "")):
+                    found.add(value.casefold())
+        return found
+
+    def add_magnets(self, urls):
+        """Add magnet links with qBittorrent's default save path. qBittorrent fetches each one's metadata from
+        the swarm, then downloads and seeds it; trackers named in each magnet's `tr` are announced to."""
+        b = uuid.uuid4().hex
+        fields = [
+            f'--{b}\r\nContent-Disposition: form-data; name="urls"\r\n\r\n{"\r\n".join(urls)}\r\n',
+            f"--{b}--\r\n",
+        ]
+        body = "".join(fields).encode()
+        answer = self.call("torrents/add", body=body, content_type=f"multipart/form-data; boundary={b}").strip()
+        if answer == "Fails.":
+            raise RuntimeError("qBittorrent did not take the magnets")
+
     def add(self, data, save_dir, skip_checking=False, paused=None, stopped=None):
         b = uuid.uuid4().hex
         fields = [f'--{b}\r\nContent-Disposition: form-data; name="savepath"\r\n\r\n{save_dir}\r\n']
