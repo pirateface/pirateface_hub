@@ -4,7 +4,6 @@ of that job already hashed (file boundaries only: a file cut off part way is rea
 import contextlib
 import json
 import os
-import socket
 
 from pirateface.seed import user
 from pirateface.seed.hybrid import BLOCK
@@ -97,32 +96,8 @@ def lock(name=None):
         os.close(fd)
 
 
-def owner_alive(saved):
-    """Whether the checkpoint owner is alive on this host, or None when it cannot be determined."""
-    pid, host = saved.get("pid"), saved.get("host")
-    if not isinstance(pid, int) or isinstance(pid, bool) or host != socket.gethostname():
-        return None
-    # On Windows, os.kill(pid, 0) terminates the process rather than probing it.
-    if os.name == "nt":
-        return None
-    if pid == os.getpid():
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return None
-    return True
-
-
 def save(job, name=None):
-    _write(
-        _path(name),
-        {"leaseId": job["leaseId"], "job": job, "pid": os.getpid(), "host": socket.gethostname()},
-    )
+    _write(_path(name), {"leaseId": job["leaseId"], "job": job})
 
 
 def clear(name=None, files=True):
