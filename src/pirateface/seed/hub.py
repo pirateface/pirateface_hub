@@ -1,5 +1,6 @@
 """What Hugging Face says about a repo: commit, license and file fingerprints."""
 
+import http.client
 import json
 import os
 import urllib.parse
@@ -50,6 +51,63 @@ def model(repo, revision):
         if not hidden(s["rfilename"])
     }
     return data["sha"], data.get("cardData") or {}, files
+
+
+def license_problem(licenses):
+    """What is wrong with this licence body, or None when it is the shape the functions below index: a dict
+    with a licence list of dicts carrying a string id, hfNames as a list of strings and requiredFile present
+    (a string or null), and a repoLicenses list of dicts carrying repoId and license. requiredFile has to be
+    there: an absent key would otherwise read as "no file required" and pass silently. Naming the first
+    fault beats a bare False, because a shape change on the site should say which field moved."""
+    if not isinstance(licenses, dict):
+        return f"the body is {type(licenses).__name__}, not an object"
+    listed = licenses.get("licenses")
+    if not isinstance(listed, list):
+        return "licenses is not a list"
+    for index, item in enumerate(listed):
+        where = f"licenses[{index}]"
+        if not isinstance(item, dict):
+            return f"{where} is {type(item).__name__}, not an object"
+        if not isinstance(item.get("id"), str):
+            return f"{where} has no string id"
+        names = item.get("hfNames")
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            return f"{where} has hfNames that are not a list of strings"
+        if "requiredFile" not in item:
+            return f"{where} has no requiredFile"
+        if not isinstance(item["requiredFile"], (str, type(None))):
+            return f"{where} has a requiredFile of {type(item['requiredFile']).__name__}, not a string or null"
+    approved = licenses.get("repoLicenses")
+    if not isinstance(approved, list):
+        return "repoLicenses is not a list"
+    for index, row in enumerate(approved):
+        where = f"repoLicenses[{index}]"
+        if (
+            not isinstance(row, dict)
+            or not isinstance(row.get("repoId"), str)
+            or not isinstance(row.get("license"), str)
+        ):
+            return f"{where} has no string repoId and license"
+    return None
+
+
+def licenses_or_fail():
+    """The site's licence list, or the one SeedError that names it. The single place where fetching it
+    and judging its shape happen, so pf seed and pf submit cannot drift apart."""
+    from pirateface.client import api
+    from pirateface.config import API
+    from pirateface.seed import user
+
+    try:
+        licenses = api.licenses()
+    except (OSError, ValueError, http.client.HTTPException, RecursionError) as e:
+        # URLError, HTTPError, JSONDecodeError, a non-UTF-8 body, a bad status line, a truncated body,
+        # a body nested deeply enough to exhaust the decoder
+        raise user.SeedError(f"could not read the license list from {API}/api/licenses ({e})") from e
+    problem = license_problem(licenses)
+    if problem:
+        raise user.SeedError(f"could not read the license list from {API}/api/licenses ({problem})")
+    return licenses
 
 
 def license_id(card, licenses):

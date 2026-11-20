@@ -39,6 +39,12 @@ class Unreachable(Exception):
     """pirateface.co didn't answer: distinct from "this repo isn't listed"."""
 
 
+class Unreadable(Exception):
+    """The site answered, and the answer could not be read. Not an outage: it is never kept as an answer
+    and never marks the client down. Distinct from Unreachable on purpose, because _site_answer treats
+    every Unreachable as a dead site."""
+
+
 def _mark_down():
     global _down_until
     _down_until = time.monotonic() + UNREACHABLE_FOR
@@ -169,7 +175,8 @@ def torrent_file(repo_id, quant=None):
 
 
 def pf_only(repo_id):
-    """listed(repo_id) if only Pirate Face has the repo, else None."""
+    """listed(repo_id) if only Pirate Face has the repo, else None. Raises Unreadable if the site's
+    listing cannot be read: every caller in huggingface/ catches it."""
     entry = lookup(repo_id)
     return listed(repo_id) if isinstance(entry, dict) and entry.get("hf") is False else None
 
@@ -177,7 +184,9 @@ def pf_only(repo_id):
 @functools.cache
 def listed(repo_id):
     """The listed commit and files {path: (size, sha256, url)}: the torrent's files the listing has a sha256
-    for. None if the repo isn't listed, has no .torrent (a licence-gated listing carries none) or no sha256s."""
+    for. None if the repo isn't listed, has no .torrent (a licence-gated listing carries none) or no sha256s.
+    Raises Unreadable when the site answered with something this client cannot read: that is not an outage,
+    and functools.cache keeps no exception, so the answer is parsed again on the next call."""
     entry = lookup(repo_id)
     if not isinstance(entry, dict):
         return None
@@ -186,12 +195,19 @@ def listed(repo_id):
         return None
     from pirateface.client import torrent  # torrent imports api
 
-    sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
     try:
+        sha = {f["path"]: f["sha256"] for f in entry.get("files") or []}
         files = {path: (size, sha[path], url) for path, size, url in torrent.files_in(data) if path in sha}
+        found = {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files}
     except torrent.Unsafe:
         return None  # a listing the client won't write: same answer as "not only on Pirate Face"
-    found = {"repo_id": entry["repoId"], "commit": entry["revision"], "files": files}
+    except (MemoryError, RecursionError):
+        # Not an answer about the site: never turn our own exhaustion into "unreadable, forever".
+        raise
+    except Exception as e:
+        # Deliberately broad: the exception surface of a bencode parser is not a list anyone can keep
+        # in step. Anything that is not Unsafe means the answer could not be read.
+        raise Unreadable(f"{repo_id}: the site's listing could not be read ({e})") from e
     return found | {"trust": "Pirate Face's listing"} if files else None
 
 
