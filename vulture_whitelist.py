@@ -14,3 +14,5 @@ torrent._cleanup  # @atexit.register: runs at interpreter exit
 _.flags  # libtorrent add_torrent_params.flags, read by libtorrent (client/torrent.py)
 _.addheaders  # urllib OpenerDirector.addheaders, read by urllib (seed/clients.py)
 _.bar_format  # tqdm bar_format, read by tqdm on each redraw (ui.py)
+_.initial  # tqdm's initial count, read when formatting the average rate (ui.py)
+_.last_print_n  # tqdm's previous count, read when updating its rate (ui.py)

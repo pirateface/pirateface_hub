@@ -116,7 +116,9 @@ def build(root, trackers, plen=None, sums=None, blocks=None):
     return build_from(root.absolute().name, from_folder(root, paths), trackers, plen, sums, blocks)
 
 
-def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None, on_file=None):
+def build_from(
+    name, sources, trackers, plen, sums=None, blocks=None, done=None, on_file=None, partial=None, on_piece=None
+):
     """Hybrid torrent from sources: (path parts, opener) pairs in torrent order (from_folder sorts them).
 
     opener() is a context manager whose read(n) returns the next n bytes, or b"" at the end. Every read
@@ -126,7 +128,11 @@ def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None,
     done: {path: (size, pieces root, piece layer, v1 piece hashes)} of files hashed by an earlier run, used
     instead of opening them (b"" for an absent root or layer). on_file(path, that tuple) is called as each
     file is finished on a piece boundary (every file once pads are added), so a run can be resumed there.
+    partial: the saved offset, v1 hashes and v2 roots of an interrupted file. on_piece receives the completed
+    piece state and stream at each piece boundary; the caller owns the stream's resumable whole-file hash.
     """
+    if partial and sums is not None:
+        raise ValueError("partial streams must provide their own resumable whole-file hash")
     per_piece = plen // BLOCK
     piece_pad = _merkle([ZERO] * per_piece, ZERO)
     v1 = _V1Pieces(plen)
@@ -138,6 +144,12 @@ def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None,
             v1.done += [pieces[i : i + 20] for i in range(0, len(pieces), 20)]
         else:
             first, size, leaves, piece_roots, root, layer = len(v1.done), 0, [], [], b"", b""
+            if partial and partial["path"] == path:
+                size = partial["offset"]
+                pieces = bytes.fromhex(partial["v1"])
+                roots = bytes.fromhex(partial["roots"])
+                v1.done.extend(pieces[i : i + 20] for i in range(0, len(pieces), 20))
+                piece_roots = [roots[i : i + 32] for i in range(0, len(roots), 32)]
             whole = hashlib.sha256() if sums is not None else None
             if blocks is not None:
                 blocks.begin(path)
@@ -153,6 +165,8 @@ def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None,
                     if len(leaves) == per_piece:
                         piece_roots.append(_merkle(leaves, ZERO))
                         leaves = []
+                        if on_piece:
+                            on_piece(path, size, b"".join(v1.done[first:]), b"".join(piece_roots), f)
             if whole:
                 sums[path] = whole.hexdigest()
             if size > plen:
@@ -163,8 +177,11 @@ def build_from(name, sources, trackers, plen, sums=None, blocks=None, done=None,
             elif size:
                 root = piece_roots[0] if piece_roots else _merkle(leaves, ZERO)
             v1.add(bytes(-size % plen if padded else 0))
-            if on_file and not v1.filled:
-                on_file(path, (size, root, layer, b"".join(v1.done[first:])))
+            if on_file and (not v1.filled or not padded):
+                pieces = b"".join(v1.done[first:])
+                if v1.filled:
+                    pieces += v1.hash.copy().digest()
+                on_file(path, (size, root, layer, pieces))
         entry = {"length": size}
         if root:
             entry["pieces root"] = root

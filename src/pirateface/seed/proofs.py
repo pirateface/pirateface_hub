@@ -42,7 +42,9 @@ class BlockHashes:
         self._file.close()
 
     def begin(self, path):
-        self._files[path] = self._current = [self._count, 0]
+        if path not in self._files:
+            self._files[path] = [self._count, 0]
+        self._current = self._files[path]
 
     def add(self, digest):
         self._file.write(digest)
@@ -59,6 +61,18 @@ class BlockHashes:
 
     def flush(self):
         self._file.flush()
+
+    def verify_partial(self, path, roots, plen):
+        """Check saved partial-file block hashes against their stored piece roots."""
+        first, count = self._files[path]
+        per_piece = plen // BLOCK
+        if count % per_piece or len(roots) != count // per_piece * 32:
+            raise ValueError(f"invalid saved block hashes for {path}")
+        self.flush()
+        for piece in range(count // per_piece):
+            actual = self._levels(first + piece * per_piece, per_piece, per_piece)[-1][0]
+            if actual != roots[piece * 32 : (piece + 1) * 32]:
+                raise ValueError(f"saved block hashes are corrupt for {path}")
 
     def _levels(self, first, count, width):
         """The hash tree over count block hashes from first, padded with zero hashes to width: leaves first."""

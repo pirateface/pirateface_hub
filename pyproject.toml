@@ -16,8 +16,12 @@ classifiers = [
 dependencies = [
     "huggingface-hub>=2.0",
     "libtorrent>=2.0",
+    "resumablesha256==1.0; implementation_name == 'cpython' and ((sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'darwin' and (platform_machine == 'arm64' or platform_machine == 'x86_64')) or (sys_platform == 'win32' and platform_machine == 'AMD64'))",
     "tqdm>=4.42",
 ]
+
+[project.optional-dependencies]
+piece-resume = ["resumablesha256==1.0"]
 
 [project.urls]
 Homepage = "https://pirateface.co"

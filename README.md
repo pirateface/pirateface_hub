@@ -50,10 +50,24 @@ pf seed --upgrade         # switch torrents Pirate Face replaced to their replac
 `pf work --max-download-rate 10` caps the Hugging Face stream at 10 MB/s; without the option, it is unlimited.
 The limit applies per process, so multiple workers can use more bandwidth in total.
 If `pf work` is interrupted, it saves the lease and file metadata privately under the Pirate Face config directory
-and resumes that job on the next run while the lease is still active. Each fully streamed file's hashes are saved
-too, so the resumed run (or a later lease of the same job at the same revision) restarts at the file that was cut off;
-model bytes are never saved to disk. The checkpoint is removed once the job is submitted or given back.
+and resumes the job and completed torrent pieces on the next run while the lease is still active. It can also reuse
+saved progress if a new lease is granted for the same model revision and files. No model bytes are saved to disk.
+The unfinished piece is downloaded again after interruption; torrent pieces are at most 64 MiB. If the optional
+native resumable hasher is unavailable or unsupported, progress is saved at file boundaries instead, and the
+unfinished file is downloaded again. If an unfinished piece checkpoint exists when fallback is used, that file's
+partial progress is discarded; completed file checkpoints are retained.
+If the native hasher becomes available later, completed-file checkpoints are reused and new progress is saved
+at piece boundaries, even within the same job.
+On supported platforms, the native hasher is installed automatically. On other platforms, it can be explicitly
+installed (and built from source if needed) with `pip install 'pirateface[piece-resume]'` or run with
+`uvx -p 3.13 --from 'pirateface[piece-resume]' pf work`.
+Each lane keeps one checkpoint in `work-files[-NAME].json` and, with proofs enabled, a `work-files[-NAME].blocks`
+hash file. Their size is not capped. Checkpoints for a different model, revision or file list are discarded when a
+new job starts; incompatible or damaged checkpoints are kept and require `--clear-progress`. An older experimental
+SQLite checkpoint is not migrated or deleted automatically; `--clear-progress` removes it explicitly.
 Use a distinct `--name` for each concurrent worker so their checkpoints do not overwrite each other.
+Stop the worker first and pass `--clear-progress` with the same `--name` to discard its saved hashes.
+This does not release its lease.
 
 `pf restore` takes `.torrent` files or a client folder, such as qBittorrent's `BT_backup` or Transmission's `torrents/`.
 

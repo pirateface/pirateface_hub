@@ -74,6 +74,9 @@ def _open(url, headers, path, offset=0):
         if offset and resp.status != 206:
             resp.close()
             raise WorkError(f"{path}: Hugging Face would not resume the download at byte {offset}")
+        if offset and not (resp.headers.get("Content-Range") or "").startswith(f"bytes {offset}-"):
+            resp.close()
+            raise WorkError(f"{path}: Hugging Face returned an unexpected download range")
         length = resp.headers.get("Content-Length")
         return resp, (offset + int(length) if length else None)
     if isinstance(last, urllib.error.HTTPError) and last.code in WAIT_FOR:
@@ -87,11 +90,11 @@ class Stream:
     16 KiB leaf), hashes what it returns, and reports the total when it ends. A connection that drops
     part way is reopened where it stopped (HTTP Range), so a long job survives a reset."""
 
-    def __init__(self, url, headers, path, on_read, on_end, rate_limiter=None):
+    def __init__(self, url, headers, path, on_read, on_end, rate_limiter=None, offset=0, sha=None):
         self.url, self.headers, self.path, self.on_read, self.on_end = url, headers, path, on_read, on_end
         self.rate_limiter = rate_limiter
-        self.sha, self.size, self.ended, self.drops = hashlib.sha256(), 0, False, 0
-        self.resp, self.length = _open(url, headers, path)
+        self.sha, self.size, self.ended, self.drops = sha or hashlib.sha256(), offset, False, 0
+        self.resp, self.length = _open(url, headers, path, offset)
 
     def __enter__(self):
         return self
@@ -137,7 +140,7 @@ class Stream:
         return bytes(buf)
 
 
-def open_file(repo, revision, path, on_read, on_end, rate_limiter=None):
+def open_file(repo, revision, path, on_read, on_end, rate_limiter=None, offset=0, sha=None):
     """A Stream for one file."""
     url = f"{HF}/{repo}/resolve/{urllib.parse.quote(revision)}/{urllib.parse.quote(path)}"
-    return Stream(url, hub.headers(), path, on_read, on_end, rate_limiter)
+    return Stream(url, hub.headers(), path, on_read, on_end, rate_limiter, offset, sha)
