@@ -179,10 +179,19 @@ def _run_locked(args, key, trackers, max_bytes, max_download_rate):
         pending = state.load(args.name)
     except OSError as e:
         sys.exit(f"error: {e}")
-    if pending and state.owner_alive(pending) is not False:
+    owner_alive = state.owner_alive(pending) if pending else False
+    if pending and owner_alive is not False:
         label = args.name or "default"
+        lease_file = state.lease_path(args.name)
+        if owner_alive is None:
+            sys.exit(
+                f"error: worker {label} has a saved lease at {lease_file}, but its owner is unknown; refusing a duplicate build. "
+                "After confirming no pf work process is using it, delete this lease file and rerun pf work. "
+                "The finished-file hashes are kept separately."
+            )
         sys.exit(
-            f"error: worker {label} has a saved lease owned by a running or unknown process; refusing a duplicate build"
+            f"error: worker {label} has a saved lease at {lease_file} owned by a running process; "
+            "stop that worker before starting another build"
         )
     backoff = WORK_BACKOFF_MIN
     while True:
