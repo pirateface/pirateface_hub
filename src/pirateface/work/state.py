@@ -118,25 +118,6 @@ def owner_alive(saved):
     return True
 
 
-def find(lease_id):
-    """Find a saved job by lease id, including checkpoints saved under another worker name.
-
-    The third value is True/False when this host can tell whether its owner process is alive, or None when unknown.
-    """
-    for path in STATE_FILE.parent.glob("work-lease*.json"):
-        try:
-            saved = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(saved, dict) or saved.get("leaseId") != lease_id:
-            continue
-        if not isinstance(saved.get("job"), dict):
-            raise OSError(f"saved work lease at {path} is invalid; remove it to start fresh")
-        name = None if path == STATE_FILE else path.name.removeprefix("work-lease-").removesuffix(".json")
-        return saved, name, owner_alive(saved)
-    return None
-
-
 def save(job, name=None):
     _write(
         _path(name),
