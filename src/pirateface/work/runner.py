@@ -10,7 +10,7 @@ from pirateface.seed import proofs, user
 from pirateface.work import build, site, state
 from pirateface.work.errors import LeaseLost, Oversize, WorkError, WorkUnreachable
 
-WORK_BACKOFF_MIN = 30  # seconds between lease polls while the site can't be reached
+WORK_BACKOFF_MIN = 30  # the first pause after a failed lease poll or a failed job; doubles to the cap
 WORK_BACKOFF_MAX = 300  # cap: the site keeps a lease for 10 minutes, so a 5-minute pause is safe
 
 
@@ -163,6 +163,9 @@ def _run_locked(args, key, trackers, max_bytes, max_download_rate):
             if pending:
                 listed = _resume_once(key, trackers, args.name, pending, max_bytes, max_download_rate)
                 if listed is None:
+                    # The site answered, so the site is not unreachable: this saved lease cannot be kept
+                    # (expired, refused, or not renewable). Reset the pause before asking for the next job.
+                    backoff = WORK_BACKOFF_MIN
                     pending = None
                     continue
                 pending = None
@@ -185,14 +188,18 @@ def _run_locked(args, key, trackers, max_bytes, max_download_rate):
             pending = None
             if args.once:
                 sys.exit(f"error: {e}")
-            # Ask for another job: the failed lease was given back.
-            print(f"error: {e}. Taking the next job.", file=sys.stderr)
+            # The lease is cleared and given back on a best-effort release, so the site may offer the same
+            # row again at once. Pause before asking, the way the Oversize arm above already does: retrying
+            # at once only spins. Both arms share `backoff`, so failures of either kind escalate together.
+            print(f"error: {e}. Taking the next job in {backoff} s.", file=sys.stderr)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, WORK_BACKOFF_MAX)
             continue
         except user.SeedError as e:
             sys.exit(
                 f"error: {e}. The lease lapses after 10 minutes without renewal; the request then returns to the queue."
             )
-        backoff = WORK_BACKOFF_MIN  # the site answered: reset the network-error backoff
+        backoff = WORK_BACKOFF_MIN  # the site answered: reset the pause both failure arms share
         if listed is None:
             if args.once:
                 print("No work is queued right now.")
